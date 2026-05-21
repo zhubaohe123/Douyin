@@ -448,8 +448,8 @@ function App() {
         let videoCommentsFetched = 0;
 
         while (hasMore && crawlActiveRef.current) {
-          // Check global crawl limit
-          if (allComments.length >= fetchLimit) {
+          // Check per-video crawl limit
+          if (videoCommentsFetched >= fetchLimit) {
             break;
           }
 
@@ -523,7 +523,7 @@ function App() {
           hasMore = cdata.has_more === 1 || cdata.has_more === true;
           
           // Update progress calculations
-          const currentTarget = Math.min(aggregatedTotalComments || fetchLimit, fetchLimit);
+          const currentTarget = Math.min(aggregatedTotalComments || (videoList.length * fetchLimit), videoList.length * fetchLimit);
           const percent = Math.min(Math.round((allComments.length / currentTarget) * 100), 100);
           setPercentProgress(percent);
 
