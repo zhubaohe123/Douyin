@@ -14,16 +14,6 @@ export default defineConfig({
       '/api': {
         target: 'http://10.11.1.88',
         changeOrigin: true,
-      },
-      '/justoneapi-global': {
-        target: 'https://api.justoneapi.com',
-        changeOrigin: true,
-        rewrite: (path) => path.replace(/^\/justoneapi-global/, '')
-      },
-      '/justoneapi-cn': {
-        target: 'http://47.117.133.51:30015',
-        changeOrigin: true,
-        rewrite: (path) => path.replace(/^\/justoneapi-cn/, '')
       }
     }
   }

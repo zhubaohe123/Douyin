@@ -40,14 +40,10 @@ function App() {
   const [videoKeywordFilter, setVideoKeywordFilter] = useState('');
   const [profileVideoLimit, setProfileVideoLimit] = useState(20);
 
-  // Just One API V4 Keyword Search Configuration States
+  // 自定义 Playwright 搜索 API 配置状态
   const [crawlMode, setCrawlMode] = useState('links'); // 'links' or 'search'
   const [searchKeyword, setSearchKeyword] = useState('');
-  const [searchToken, setSearchToken] = useState('');
-  const [searchGateway, setSearchGateway] = useState('cn'); // 'cn' or 'global'
-  const [searchSortType, setSearchSortType] = useState('_0'); // '_0' (综合), '_1' (点赞最多), '_2' (最新)
-  const [searchPublishTime, setSearchPublishTime] = useState('_0'); // '_0' (不限), '_1' (24h), '_7' (7天), '_180' (6个月)
-  const [searchDuration, setSearchDuration] = useState('_0'); // '_0' (不限), '_1' (1min以内), '_2' (1-5min), '_3' (>5min)
+  const [searchApiUrl, setSearchApiUrl] = useState('http://localhost:8000');
   const [searchPages, setSearchPages] = useState(1); // 1 to 5 pages
   
   // Crawler Execution State
@@ -308,83 +304,43 @@ function App() {
     return resolvedIds;
   };
 
-  // Resolve videos from keyword search via Just One API (V4)
-  const resolveVideosBySearch = async (keyword, token) => {
+  // Resolve videos from keyword search via Custom Playwright API
+  const resolveVideosBySearch = async (keyword, apiUrl) => {
     if (!keyword.trim()) {
       throw new Error('请输入搜索关键词');
     }
-    if (!token.trim()) {
-      throw new Error('请输入 Just One API 访问令牌 (Token)');
+    if (!apiUrl.trim()) {
+      throw new Error('请输入搜索 API 接口服务地址');
     }
 
     const resolvedIds = [];
-    let currentSearchId = '';
     const totalPages = parseInt(searchPages, 10) || 1;
 
-    setProgressText(`开始使用 Just One API 进行全网视频搜索，关键词: "${keyword}"...`);
+    setProgressText(`开始使用自定义搜索 API 进行视频搜索，关键词: "${keyword}"...`);
 
-    // Choose active proxy route based on user gateway configuration
-    const proxyPrefix = searchGateway === 'cn' ? '/justoneapi-cn' : '/justoneapi-global';
+    // Clean api base URL (remove trailing slash if present)
+    const baseApi = apiUrl.trim().replace(/\/+$/, '');
 
     for (let currentPage = 1; currentPage <= totalPages; currentPage++) {
       if (!crawlActiveRef.current) break;
 
       setProgressText(`正在搜索作品列表 (第 ${currentPage}/${totalPages} 页)...`);
 
-      // Build endpoint query parameters (using exact V4 parameter naming conventions)
-      let queryParams = `token=${encodeURIComponent(token.trim())}&keyword=${encodeURIComponent(keyword.trim())}`;
-      queryParams += `&sortType=${searchSortType}`;
-      queryParams += `&publishTime=${searchPublishTime}`;
-      queryParams += `&duration=${searchDuration}`;
-      queryParams += `&page=${currentPage}`;
-
-      if (currentPage > 1 && currentSearchId) {
-        queryParams += `&searchId=${encodeURIComponent(currentSearchId)}`;
-      }
-
-      const searchUrl = `${proxyPrefix}/api/douyin/search-video/v4?${queryParams}`;
+      // Build API request URL
+      const searchUrl = `${baseApi}/api/search?keyword=${encodeURIComponent(keyword.trim())}&page=${currentPage}`;
 
       try {
         const response = await fetch(searchUrl);
         if (!response.ok) {
+          if (response.status === 403) {
+            throw new Error('需要更新 Cookie 授权，请在接口服务器终端运行 login.py');
+          }
           throw new Error(`HTTP 异常 ${response.status}`);
         }
 
         const resData = await response.json();
         
-        // According to documentation, code "0" indicates successful business execution
-        const businessCode = String(resData.code);
-        if (businessCode !== '0') {
-          // Handle error codes explicitly
-          let errorMsg = resData.message || resData.msg || `业务异常 (错误码: ${businessCode})`;
-          if (businessCode === '100') errorMsg = 'Token 无效或已失效，请检查您的访问令牌。';
-          else if (businessCode === '301') errorMsg = '采集服务器繁忙，请稍后重试。';
-          else if (businessCode === '302') errorMsg = '已超出接口调用速率限制。';
-          else if (businessCode === '303') errorMsg = '已超出接口每日调用配额。';
-          else if (businessCode === '601') errorMsg = '您的 API 余额不足，请充值。';
-          throw new Error(errorMsg);
-        }
-
-        const searchData = resData.data;
-        if (!searchData) {
-          break;
-        }
-
-        // Keep the returned search_id for chained deep page pagination
-        if (searchData.search_id) {
-          currentSearchId = searchData.search_id;
-        }
-
-        // Support Just One API V4 (nested in business_data.data.aweme_info) as well as raw Douyin aweme_list / flat list
-        let videoList = [];
-        if (searchData.business_data && Array.isArray(searchData.business_data)) {
-          videoList = searchData.business_data
-            .map(item => item?.data?.aweme_info || item?.data || item)
-            .filter(Boolean);
-        } else {
-          videoList = searchData.aweme_list || searchData.list || [];
-        }
-
+        const videoList = resData.videos || [];
         if (videoList.length === 0) {
           setProgressText(`搜索已到底，第 ${currentPage} 页无更多匹配作品`);
           break;
@@ -394,11 +350,10 @@ function App() {
         for (const video of videoList) {
           if (!video) continue;
 
-          // Safely map all possible video/author/statistics variations defensively
-          const videoId = String(video.aweme_id || video.video_id || video.id || '');
+          const videoId = String(video.video_id || '');
           if (!videoId) continue;
 
-          const desc = video.desc || video.title || `视频作品 #${videoId}`;
+          const desc = video.title || `视频作品 #${videoId}`;
 
           // Extra validation: Apply client-side video title keyword filter if configured
           const matchesVideoKeyword = !videoKeywordFilter.trim() || 
@@ -409,13 +364,13 @@ function App() {
               id: videoId,
               original: `搜索 "${keyword}" 第 ${currentPage} 页 #${videoId}`,
               title: desc,
-              cover: video.video?.cover?.url_list?.[0] || video.video?.dynamic_cover?.url_list?.[0] || video.cover || video.cover_url || '',
-              authorName: video.author?.nickname || video.author?.name || '抖音创作者',
-              authorAvatar: video.author?.avatar_thumb?.url_list?.[0] || video.author?.avatar || video.author?.avatar_url || '',
-              likes: video.statistics?.digg_count || video.statistics?.like_count || video.likes || 0,
-              commentsCount: video.statistics?.comment_count || video.comments || 0,
-              shares: video.statistics?.share_count || video.shares || 0,
-              collects: video.statistics?.collect_count || video.collects || 0
+              cover: video.cover_url || video.dynamic_cover_url || '',
+              authorName: video.author?.name || '抖音创作者',
+              authorAvatar: video.author?.avatar || '',
+              likes: video.likes || 0,
+              commentsCount: video.comments || 0,
+              shares: video.shares || 0,
+              collects: video.favorites || 0
             });
             pageMatchedCount++;
           }
@@ -671,7 +626,7 @@ function App() {
       // 1. Resolve all input IDs or trigger keyword-based search resolution
       let videoList = [];
       if (crawlMode === 'search') {
-        videoList = await resolveVideosBySearch(searchKeyword, searchToken);
+        videoList = await resolveVideosBySearch(searchKeyword, searchApiUrl);
       } else {
         videoList = await resolveAllAwemeIds(inputUrls);
       }
@@ -1244,82 +1199,17 @@ function App() {
               <div className="input-group" style={{ animation: 'fadeIn 0.3s ease' }}>
                 <label className="input-label" style={{display: 'flex', alignItems: 'center', gap: '6px'}}>
                   <Info size={13} style={{color: 'var(--color-primary)'}} />
-                  <span>Just One API 访问令牌 (Token)</span>
+                  <span>搜索 API 接口服务地址</span>
                 </label>
                 <input 
-                  type="password" 
+                  type="text" 
                   className="input-field" 
-                  placeholder="请输入您的 API Key / Token" 
-                  value={searchToken}
-                  onChange={(e) => setSearchToken(e.target.value)}
+                  placeholder="如: http://localhost:8000" 
+                  value={searchApiUrl}
+                  onChange={(e) => setSearchApiUrl(e.target.value)}
                   disabled={isCrawling}
                   style={{ fontFamily: 'monospace' }}
                 />
-              </div>
-
-              <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '12px', animation: 'fadeIn 0.3s ease' }}>
-                <div className="input-group">
-                  <label className="input-label">搜索接口网关</label>
-                  <select 
-                    className="input-field" 
-                    style={{ fontSize: '0.8rem', padding: '10px 12px' }}
-                    value={searchGateway}
-                    onChange={(e) => setSearchGateway(e.target.value)}
-                    disabled={isCrawling}
-                  >
-                    <option value="cn">大陆加速 (推荐)</option>
-                    <option value="global">全球默认 (海外)</option>
-                  </select>
-                </div>
-
-                <div className="input-group">
-                  <label className="input-label">排序标准</label>
-                  <select 
-                    className="input-field" 
-                    style={{ fontSize: '0.8rem', padding: '10px 12px' }}
-                    value={searchSortType}
-                    onChange={(e) => setSearchSortType(e.target.value)}
-                    disabled={isCrawling}
-                  >
-                    <option value="_0">综合排序</option>
-                    <option value="_1">点赞最多</option>
-                    <option value="_2">最新发布</option>
-                  </select>
-                </div>
-              </div>
-
-              <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '12px', animation: 'fadeIn 0.3s ease' }}>
-                <div className="input-group">
-                  <label className="input-label">发布时间</label>
-                  <select 
-                    className="input-field" 
-                    style={{ fontSize: '0.8rem', padding: '10px 12px' }}
-                    value={searchPublishTime}
-                    onChange={(e) => setSearchPublishTime(e.target.value)}
-                    disabled={isCrawling}
-                  >
-                    <option value="_0">全部时间</option>
-                    <option value="_1">最近 24 小时</option>
-                    <option value="_7">最近 7 天</option>
-                    <option value="_180">最近 6 个月</option>
-                  </select>
-                </div>
-
-                <div className="input-group">
-                  <label className="input-label">视频时长</label>
-                  <select 
-                    className="input-field" 
-                    style={{ fontSize: '0.8rem', padding: '10px 12px' }}
-                    value={searchDuration}
-                    onChange={(e) => setSearchDuration(e.target.value)}
-                    disabled={isCrawling}
-                  >
-                    <option value="_0">不限时长</option>
-                    <option value="_1">1 分钟以内</option>
-                    <option value="_2">1 - 5 分钟</option>
-                    <option value="_3">5 分钟以上</option>
-                  </select>
-                </div>
               </div>
 
               <div className="input-group" style={{ animation: 'fadeIn 0.3s ease' }}>
@@ -1333,11 +1223,13 @@ function App() {
                   onChange={(e) => setSearchPages(parseInt(e.target.value, 10))}
                   disabled={isCrawling}
                 >
-                  <option value={1}>抓取第 1 页 (~10个作品)</option>
-                  <option value={2}>抓取前 2 页 (~20个作品)</option>
-                  <option value={3}>抓取前 3 页 (~30个作品)</option>
-                  <option value={4}>抓取前 4 页 (~40个作品)</option>
-                  <option value={5}>抓取前 5 页 (~50个作品 - 深度模式)</option>
+                  <option value={1}>抓取第 1 页 (~16个作品)</option>
+                  <option value={2}>抓取前 2 页 (~32个作品)</option>
+                  <option value={3}>抓取前 3 页 (~48个作品)</option>
+                  <option value={4}>抓取前 4 页 (~64个作品)</option>
+                  <option value={5}>抓取前 5 页 (~80个作品 - 深度模式)</option>
+                  <option value={8}>抓取前 8 页 (~128个作品 - 超强检索)</option>
+                  <option value={12}>抓取前 12 页 (~192个作品 - 极限探索)</option>
                 </select>
               </div>
             </>
@@ -1420,7 +1312,7 @@ function App() {
               <button 
                 className="btn-primary" 
                 onClick={startCrawling}
-                disabled={crawlMode === 'search' ? (!searchKeyword.trim() || !searchToken.trim()) : !inputUrls.trim()}
+                disabled={crawlMode === 'search' ? (!searchKeyword.trim() || !searchApiUrl.trim()) : !inputUrls.trim()}
               >
                 <Play size={16} fill="white" />
                 <span>开始爬取</span>
