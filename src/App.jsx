@@ -590,6 +590,13 @@ function App() {
     }
   }, [dbSearchQuery, dbSearchVideoId, dbSearchIp, dbSortOrder, dbPageSize]);
 
+  // 监听数据库筛选条件与排序变化，自动触发查询
+  useEffect(() => {
+    if (activeTab === 'database') {
+      fetchDbComments(1);
+    }
+  }, [dbSearchVideoId, dbSortOrder, activeTab, fetchDbComments]);
+
   // Fetch database stats
   const fetchDbStats = async () => {
     try {
@@ -1634,7 +1641,6 @@ function App() {
                   className={`tab-btn ${activeTab === 'database' ? 'active' : ''}`}
                   onClick={() => {
                     setActiveTab('database');
-                    fetchDbComments(1);
                     fetchDbStats();
                     fetchDbVideos();
                     fetchDbTasks();
@@ -2238,7 +2244,6 @@ function App() {
                 style={{marginTop: '20px', padding: '12px 28px', borderRadius: '50px', fontSize: '0.9rem', border: '1px solid rgba(16,185,129,0.3)', color: '#10b981'}}
                 onClick={() => {
                   setActiveTab('database');
-                  fetchDbComments(1);
                   fetchDbStats();
                   fetchDbVideos();
                   fetchDbTasks();
