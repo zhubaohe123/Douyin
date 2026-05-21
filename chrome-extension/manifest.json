@@ -1,0 +1,34 @@
+{
+  "manifest_version": 3,
+  "name": "抖音评论定位助手",
+  "version": "1.0.0",
+  "description": "配合抖音评论采集系统使用，支持在抖音作品页面自动精准滚动定位并高亮显示指定的评论或回复。",
+  "permissions": [
+    "storage"
+  ],
+  "host_permissions": [
+    "https://*.douyin.com/*"
+  ],
+  "background": {
+    "service_worker": "background.js"
+  },
+  "content_scripts": [
+    {
+      "matches": [
+        "http://localhost/*",
+        "http://127.0.0.1/*",
+        "https://*/*"
+      ],
+      "js": ["content-collector.js"],
+      "run_at": "document_start"
+    },
+    {
+      "matches": [
+        "https://*.douyin.com/video/*",
+        "https://*.douyin.com/note/*"
+      ],
+      "js": ["content-douyin.js"],
+      "run_at": "document_idle"
+    }
+  ]
+}
