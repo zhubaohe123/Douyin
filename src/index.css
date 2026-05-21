@@ -759,3 +759,66 @@ body {
   border-left: 4px solid var(--color-accent) !important;
 }
 
+/* Concurrency Thread Board */
+.thread-board {
+  animation: fadeIn 0.4s ease-out;
+}
+
+.thread-grid {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin-top: 6px;
+}
+
+.thread-card {
+  background: rgba(255, 255, 255, 0.02);
+  border: 1px solid rgba(255, 255, 255, 0.04);
+  border-radius: var(--radius-sm);
+  padding: 8px 12px;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  position: relative;
+  overflow: hidden;
+  transition: all 0.3s ease;
+}
+
+.thread-card.working {
+  border-color: rgba(0, 242, 254, 0.15);
+  background: rgba(0, 242, 254, 0.02);
+  box-shadow: 0 2px 10px rgba(0, 242, 254, 0.05);
+}
+
+.thread-card.completed {
+  border-color: rgba(16, 185, 129, 0.15);
+  background: rgba(16, 185, 129, 0.02);
+}
+
+/* Blinking Indicator Dot */
+.thread-indicator {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background-color: rgba(255, 255, 255, 0.15);
+  flex-shrink: 0;
+  transition: all 0.3s ease;
+}
+
+.thread-indicator.working {
+  background-color: #00f2fe;
+  box-shadow: 0 0 8px #00f2fe;
+  animation: threadBlink 1.5s infinite;
+}
+
+.thread-indicator.completed {
+  background-color: var(--color-success);
+  box-shadow: 0 0 8px var(--color-success);
+}
+
+@keyframes threadBlink {
+  0% { opacity: 0.4; }
+  50% { opacity: 1; }
+  100% { opacity: 0.4; }
+}
+

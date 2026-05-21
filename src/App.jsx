@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useRef } from 'react';
+import React, { useState, useEffect, useRef, useCallback } from 'react';
 import { 
   Search, 
   Download, 
@@ -19,7 +19,14 @@ import {
   FileSpreadsheet,
   X,
   RotateCcw,
-  Filter
+  Filter,
+  Database,
+  Save,
+  ChevronLeft,
+  ChevronRight,
+  Loader2,
+  History,
+  Trash2
 } from 'lucide-react';
 import * as XLSX from 'xlsx';
 import './App.css';
@@ -50,6 +57,8 @@ function App() {
   const [fetchedCount, setFetchedCount] = useState(0);
   const [totalEstimated, setTotalEstimated] = useState(0);
   const [percentProgress, setPercentProgress] = useState(0);
+  const [concurrency, setConcurrency] = useState(2);
+  const [activeWorkers, setActiveWorkers] = useState([]);
 
   // Data State
   const [videoInfo, setVideoInfo] = useState(null);
@@ -62,6 +71,23 @@ function App() {
   const [notification, setNotification] = useState(null);
   const [hasExtension, setHasExtension] = useState(false);
   
+  // Database State
+  const [isSavingToDb, setIsSavingToDb] = useState(false);
+  const [dbSaveResult, setDbSaveResult] = useState(null);
+  const [dbActiveTab, setDbActiveTab] = useState('search'); // 'search' or 'history'
+  const [dbSearchQuery, setDbSearchQuery] = useState('');
+  const [dbSearchIp, setDbSearchIp] = useState('');
+  const [dbSearchVideoId, setDbSearchVideoId] = useState('');
+  const [dbComments, setDbComments] = useState([]);
+  const [dbTotalCount, setDbTotalCount] = useState(0);
+  const [dbPage, setDbPage] = useState(1);
+  const [dbPageSize] = useState(50);
+  const [dbIsLoading, setDbIsLoading] = useState(false);
+  const [dbSortOrder, setDbSortOrder] = useState('digg_count');
+  const [dbVideos, setDbVideos] = useState([]);
+  const [dbTasks, setDbTasks] = useState([]);
+  const [dbStats, setDbStats] = useState(null);
+
   // Refs to control crawling loops
   const crawlActiveRef = useRef(false);
 
@@ -109,15 +135,15 @@ function App() {
 
   // 触发定位事件，向浏览器助手插件广播跳转载荷
   const handleJumpToComment = (c, parentVideoId = null) => {
-    const videoId = parentVideoId || c.video_id;
+    const videoId = parentVideoId || c.video_id || c.aweme_id;
     if (!videoId) return;
 
     const payload = {
       videoId: videoId,
       commentId: String(c.cid),
-      nickname: c.user?.nickname || '未知用户',
+      nickname: c.user?.nickname || c.user_nickname || '未知用户',
       text: c.text || '',
-      parentId: c.reply_id || null,
+      parentId: c.reply_id || c.parent_comment_id || null,
       timestamp: Date.now()
     };
 
@@ -455,6 +481,172 @@ function App() {
     };
   };
 
+  // ============ DATABASE FUNCTIONS ============
+
+  // Save crawled comments to database
+  const handleSaveToDatabase = async () => {
+    if (comments.length === 0) {
+      showNotification('没有可保存的评论数据', 'error');
+      return;
+    }
+
+    setIsSavingToDb(true);
+    setDbSaveResult(null);
+
+    try {
+      const payload = {
+        video: videoInfo ? {
+          aweme_id: videoInfo.awemeId || '',
+          title: videoInfo.title || '',
+          cover_url: videoInfo.cover || '',
+          author_name: videoInfo.authorName || '',
+          author_avatar: videoInfo.authorAvatar || '',
+          likes: videoInfo.likes || 0,
+          comments_count: videoInfo.commentsCount || 0,
+          shares: videoInfo.shares || 0,
+          collects: videoInfo.collects || 0
+        } : null,
+        comments: comments.map(c => ({
+          cid: String(c.cid),
+          aweme_id: c.video_id || '',
+          parent_comment_id: c.reply_id || null,
+          user_nickname: c.user?.nickname || '未知用户',
+          user_id: c.user?.uid || c.user?.id || null,
+          user_avatar: c.user?.avatar_thumb?.url_list?.[0] || '',
+          text: c.text || '',
+          digg_count: c.digg_count || 0,
+          reply_count: c.reply_comment_total || 0,
+          ip_label: c.ip_label || null,
+          create_time: c.create_time || null,
+          video_title: c.video_title || ''
+        })),
+        task: {
+          task_type: crawlMode,
+          input_source: crawlMode === 'search' ? searchKeyword : inputUrls.substring(0, 500),
+          keyword_filter: keywordFilter || null,
+          video_filter: videoKeywordFilter || null
+        }
+      };
+
+      const response = await fetch('/api/db/sync/comments', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload)
+      });
+
+      if (!response.ok) {
+        throw new Error(`服务器返回 HTTP ${response.status}`);
+      }
+
+      const result = await response.json();
+      const syncData = result.data || result;
+      setDbSaveResult({
+        insertedComments: syncData.comments_inserted || 0,
+        skippedComments: (comments.length - (syncData.comments_inserted || 0)),
+        videosProcessed: syncData.video_id ? 1 : 0
+      });
+      showNotification(`成功保存到数据库！新增 ${syncData.comments_inserted || 0} 条，接收 ${syncData.comments_received || comments.length} 条`, 'success');
+    } catch (err) {
+      console.error('保存到数据库失败:', err);
+      showNotification(`保存失败: ${err.message}。请确认后端服务已启动 (端口 3001)`, 'error');
+    } finally {
+      setIsSavingToDb(false);
+    }
+  };
+
+  // Fetch comments from database with filters
+  const fetchDbComments = useCallback(async (page = 1) => {
+    setDbIsLoading(true);
+    try {
+      const params = new URLSearchParams({
+        page: String(page),
+        size: String(dbPageSize),
+        sort: dbSortOrder
+      });
+      if (dbSearchVideoId) params.append('aweme_id', dbSearchVideoId);
+      if (dbSearchIp) params.append('ip_label', dbSearchIp);
+
+      let url;
+      if (dbSearchQuery.trim()) {
+        params.append('q', dbSearchQuery.trim());
+        url = `/api/db/comments/search?${params}`;
+      } else {
+        url = `/api/db/comments?${params}`;
+      }
+
+      const response = await fetch(url);
+      if (!response.ok) throw new Error(`HTTP ${response.status}`);
+      const data = await response.json();
+      const result = data.data || data;
+
+      setDbComments(result.list || result.comments || result.rows || []);
+      setDbTotalCount(result.total || result.count || 0);
+      setDbPage(page);
+    } catch (err) {
+      console.error('查询数据库失败:', err);
+      showNotification(`数据库查询失败: ${err.message}`, 'error');
+    } finally {
+      setDbIsLoading(false);
+    }
+  }, [dbSearchQuery, dbSearchVideoId, dbSearchIp, dbSortOrder, dbPageSize]);
+
+  // Fetch database stats
+  const fetchDbStats = async () => {
+    try {
+      const response = await fetch('/api/db/comments/stats');
+      if (!response.ok) throw new Error();
+      const data = await response.json();
+      const result = data.data || data;
+      setDbStats({
+        totalComments: result.total || 0,
+        totalVideos: result.total_videos || 0,
+        totalLikes: result.total_likes || 0,
+        ipDistribution: result.ip_distribution || [],
+        topLiked: result.top_liked || [],
+      });
+    } catch (err) {
+      console.error('获取统计失败:', err);
+    }
+  };
+
+  // Fetch all videos from database
+  const fetchDbVideos = async () => {
+    try {
+      const response = await fetch('/api/db/videos');
+      if (!response.ok) throw new Error();
+      const data = await response.json();
+      const result = data.data || data;
+      setDbVideos(result.videos || result.list || result || []);
+    } catch (err) {
+      console.error('获取视频列表失败:', err);
+    }
+  };
+
+  // Fetch crawl task history
+  const fetchDbTasks = async () => {
+    try {
+      const response = await fetch('/api/db/tasks');
+      if (!response.ok) throw new Error();
+      const data = await response.json();
+      const result = data.data || data;
+      setDbTasks(result.tasks || result.list || result || []);
+    } catch (err) {
+      console.error('获取任务历史失败:', err);
+    }
+  };
+
+  // Delete comment from database
+  const handleDbDeleteComment = async (cid) => {
+    try {
+      const response = await fetch(`/api/db/comments/${cid}`, { method: 'DELETE' });
+      if (!response.ok) throw new Error();
+      showNotification('评论已从数据库中删除', 'success');
+      fetchDbComments(dbPage);
+    } catch (err) {
+      showNotification('删除失败', 'error');
+    }
+  };
+
   // Master Crawl Executor (supporting batch crawl and keywords)
   const startCrawling = async () => {
     if (isCrawling) return;
@@ -478,146 +670,236 @@ function App() {
       }
       showNotification(`解析成功，即将开始抓取 ${videoList.length} 个视频的评论`, 'info');
       
-      let allComments = [];
       const fetchLimit = parseInt(maxComments, 10) || 100000;
       
       // Calculate total expected comments if available (sum of all video stats)
       let aggregatedTotalComments = 0;
+      videoList.forEach(v => {
+        aggregatedTotalComments += (v.commentsCount || 0);
+      });
+      setTotalEstimated(aggregatedTotalComments || (videoList.length * 100));
 
-      for (let vIndex = 0; vIndex < videoList.length && crawlActiveRef.current; vIndex++) {
-        const currentVideo = videoList[vIndex];
-        setProgressText(`[第 ${vIndex + 1}/${videoList.length} 个视频] 正在加载视频详情 (ID: ${currentVideo.id})...`);
-        
-        // Load details for current video (optimized if already preloaded)
-        let details;
-        if (currentVideo.likes !== undefined) {
-          details = currentVideo;
-        } else {
-          details = await fetchSingleVideoDetails(currentVideo.id);
-        }
+      const videoQueue = [...videoList];
+      const workerCount = Math.min(concurrency, videoList.length);
+      
+      // Initialize active workers status
+      const initialWorkers = Array.from({ length: workerCount }, (_, i) => ({
+        id: i + 1,
+        status: 'working',
+        videoTitle: '准备就绪...',
+        fetchedCount: 0
+      }));
+      setActiveWorkers(initialWorkers);
 
-        // Apply video title keyword filter
-        const matchesVideoKeyword = !videoKeywordFilter.trim() || 
-          (details.title && details.title.toLowerCase().includes(videoKeywordFilter.trim().toLowerCase()));
-        
-        if (!matchesVideoKeyword) {
-          setProgressText(`[视频 ${vIndex + 1}/${videoList.length}] 标题不匹配 "${videoKeywordFilter}"，跳过该作品...`);
-          continue;
-        }
-        
-        // Display header for the first or main video
-        if (vIndex === 0 || !videoInfo) {
-          setVideoInfo(details);
-        }
-        
-        aggregatedTotalComments += details.commentsCount;
-        setTotalEstimated(aggregatedTotalComments || (videoList.length * 100));
-
-        let cursor = 0;
-        let hasMore = true;
-        let videoCommentsFetched = 0;
-
-        while (hasMore && crawlActiveRef.current) {
-          // Check per-video crawl limit
-          if (videoCommentsFetched >= fetchLimit) {
-            break;
-          }
-
-          setProgressText(`[视频 ${vIndex + 1}/${videoList.length}] 抓取中... (已获取该视频: ${videoCommentsFetched} 条, 总抓取量: ${allComments.length} 条)`);
+      let allComments = [];
+      
+      // Thread-safe functional state updater with cid deduplication
+      const appendComments = (newComments, videoId, videoTitle) => {
+        setComments(prev => {
+          const seenCids = new Set(prev.map(c => String(c.cid).trim()));
+          const uniqueNew = [];
           
-          const count = 20; // chunk size
-          const url = `/api/douyin/web/fetch_video_comments?aweme_id=${currentVideo.id}&cursor=${cursor}&count=${count}`;
-          
-          const response = await fetch(url);
-          if (!response.ok) {
-            console.error(`请求第 ${vIndex + 1} 个视频的评论分片失败`);
-            break; // Skip to next video or end gracefully
-          }
-          
-          const resData = await response.json();
-          if (resData.code !== 200 || !resData.data) {
-            console.error(`接口报错:`, resData.msg);
-            break;
-          }
-          
-          const cdata = resData.data;
-          const commentList = cdata.comments || [];
-          
-          if (commentList.length === 0) {
-            break;
-          }
-
-          // Ensure unique elements and apply text keywords filter (strictly normalize string IDs)
-          const uniqueCommentsInChunk = [];
-          const seenCids = new Set(allComments.map(c => String(c.cid).trim()));
-          
-          for (const item of commentList) {
+          newComments.forEach(item => {
             if (item && item.cid) {
               const cidStr = String(item.cid).trim();
               if (!seenCids.has(cidStr)) {
-                // Multi-keyword content check (case insensitive, supporting OR matching separated by spaces/commas)
-                const filterKeywords = keywordFilter.trim()
-                  ? keywordFilter.split(/[,，、\s|/]+/).map(k => k.trim()).filter(Boolean)
-                  : [];
-                
-                const matchesKeyword = filterKeywords.length === 0 || 
-                  filterKeywords.some(k => item.text && item.text.toLowerCase().includes(k.toLowerCase()));
-                
-                if (matchesKeyword) {
-                  // Normalize item.cid as strict string
-                  item.cid = cidStr;
-                  if (item.reply_comment) {
-                    item.reply_comment = item.reply_comment.map(reply => {
-                      if (reply && reply.cid) {
-                        reply.cid = String(reply.cid).trim();
-                      }
-                      return reply;
-                    });
-                  }
-                  
-                  // Attach video meta fields for tracking and spreadsheet export
-                  item.video_id = currentVideo.id;
-                  item.video_title = details.title;
-                  uniqueCommentsInChunk.push(item);
-                  seenCids.add(cidStr);
+                // Normalize item.cid as strict string
+                item.cid = cidStr;
+                if (item.reply_comment) {
+                  item.reply_comment = item.reply_comment.map(reply => {
+                    if (reply && reply.cid) {
+                      reply.cid = String(reply.cid).trim();
+                    }
+                    return reply;
+                  });
                 }
+                
+                // Attach video meta fields for tracking and spreadsheet export
+                item.video_id = videoId;
+                item.video_title = videoTitle;
+                uniqueNew.push(item);
+                seenCids.add(cidStr);
               }
             }
-          }
-
-          videoCommentsFetched += commentList.length;
-          allComments = [...allComments, ...uniqueCommentsInChunk];
+          });
           
-          // Re-render dynamic list updates
-          setComments(allComments);
-          setFetchedCount(allComments.length);
-          
-          // Next page pointers
-          cursor = cdata.cursor || (cursor + commentList.length);
-          hasMore = cdata.has_more === 1 || cdata.has_more === true;
+          const merged = [...prev, ...uniqueNew];
+          allComments = merged; // Update local scope reference
+          setFetchedCount(merged.length);
           
           // Update progress calculations
           const currentTarget = Math.min(aggregatedTotalComments || (videoList.length * fetchLimit), videoList.length * fetchLimit);
-          const percent = Math.min(Math.round((allComments.length / currentTarget) * 100), 100);
+          const percent = Math.min(Math.round((merged.length / currentTarget) * 100), 100);
           setPercentProgress(percent);
+          
+          return merged;
+        });
+      };
 
-          // Delay to prevent getting IP banned and look visually premium
-          await new Promise(resolve => setTimeout(resolve, 800));
+      const updateWorkerState = (workerId, updateFields) => {
+        setActiveWorkers(prev => prev.map(w => w.id === workerId ? { ...w, ...updateFields } : w));
+      };
+
+      const runWorker = async (workerId) => {
+        while (videoQueue.length > 0 && crawlActiveRef.current) {
+          const currentVideo = videoQueue.shift();
+          if (!currentVideo) break;
+
+          updateWorkerState(workerId, {
+            status: 'working',
+            videoTitle: currentVideo.title || currentVideo.desc || `作品 ID: ${currentVideo.id}`,
+            fetchedCount: 0
+          });
+
+          setProgressText(`[线程 ${workerId}] 正在加载视频详情 (ID: ${currentVideo.id})...`);
+
+          let details;
+          try {
+            if (currentVideo.likes !== undefined) {
+              details = currentVideo;
+            } else {
+              details = await fetchSingleVideoDetails(currentVideo.id);
+            }
+          } catch (err) {
+            console.error(`线程 ${workerId} 获取详情失败:`, err);
+            details = {
+              title: `视频作品 #${currentVideo.id}`,
+              cover: '',
+              authorName: '抖音创作者',
+              authorAvatar: '',
+              likes: 0,
+              commentsCount: 0,
+              shares: 0,
+              collects: 0,
+              awemeId: currentVideo.id,
+              isFallback: true
+            };
+          }
+
+          // Apply video title keyword filter
+          const matchesVideoKeyword = !videoKeywordFilter.trim() || 
+            (details.title && details.title.toLowerCase().includes(videoKeywordFilter.trim().toLowerCase()));
+          
+          if (!matchesVideoKeyword) {
+            setProgressText(`[线程 ${workerId}] 标题不匹配 "${videoKeywordFilter}"，跳过该作品...`);
+            updateWorkerState(workerId, {
+              status: 'idle',
+              videoTitle: `跳过不匹配作品`,
+              fetchedCount: 0
+            });
+            continue;
+          }
+
+          // Update header info for first matching details
+          setVideoInfo(prev => prev ? prev : details);
+
+          let cursor = 0;
+          let hasMore = true;
+          let videoCommentsFetched = 0;
+
+          updateWorkerState(workerId, {
+            videoTitle: details.title,
+            fetchedCount: 0
+          });
+
+          while (hasMore && crawlActiveRef.current) {
+            if (videoCommentsFetched >= fetchLimit) {
+              break;
+            }
+
+            setProgressText(`[线程 ${workerId}] 抓取 "${details.title.substring(0, 10)}..." (已获取: ${videoCommentsFetched} 条, 总抓取: ${allComments.length} 条)`);
+
+            const count = 20;
+            const url = `/api/douyin/web/fetch_video_comments?aweme_id=${currentVideo.id}&cursor=${cursor}&count=${count}`;
+
+            try {
+              const response = await fetch(url);
+              if (!response.ok) {
+                console.error(`线程 ${workerId} 请求失败`);
+                break;
+              }
+
+              const resData = await response.json();
+              if (resData.code !== 200 || !resData.data) {
+                console.error(`线程 ${workerId} 接口报错`);
+                break;
+              }
+
+              const cdata = resData.data;
+              const commentList = cdata.comments || [];
+
+              if (commentList.length === 0) {
+                break;
+              }
+
+              // Apply comment text filtering
+              const uniqueCommentsInChunk = [];
+              for (const item of commentList) {
+                if (item && item.cid) {
+                  const filterKeywords = keywordFilter.trim()
+                    ? keywordFilter.split(/[,，、\s|/]+/).map(k => k.trim()).filter(Boolean)
+                    : [];
+
+                  const matchesKeyword = filterKeywords.length === 0 || 
+                    filterKeywords.some(k => item.text && item.text.toLowerCase().includes(k.toLowerCase()));
+
+                  if (matchesKeyword) {
+                    uniqueCommentsInChunk.push(item);
+                  }
+                }
+              }
+
+              // Thread-safe state update
+              appendComments(uniqueCommentsInChunk, currentVideo.id, details.title);
+
+              videoCommentsFetched += commentList.length;
+              updateWorkerState(workerId, {
+                fetchedCount: videoCommentsFetched
+              });
+
+              cursor = cdata.cursor || (cursor + commentList.length);
+              hasMore = cdata.has_more === 1 || cdata.has_more === true;
+
+              // Organic randomized delay per request (800ms - 1100ms)
+              const randomDelay = 800 + Math.random() * 300;
+              await new Promise(resolve => setTimeout(resolve, randomDelay));
+
+            } catch (err) {
+              console.error(`线程 ${workerId} 网络异常:`, err);
+              break;
+            }
+          }
+
+          updateWorkerState(workerId, {
+            status: 'idle',
+            videoTitle: `已完成: ${details.title.substring(0, 10)}...`
+          });
+
+          // Short sleep between queue pops
+          if (videoQueue.length > 0 && crawlActiveRef.current) {
+            await new Promise(resolve => setTimeout(resolve, 1000));
+          }
         }
 
-        // Show a brief break progress note
-        if (vIndex < videoList.length - 1 && crawlActiveRef.current) {
-          setProgressText(`[视频 ${vIndex + 1} 完成] 休息一下，即将进入下一个视频...`);
-          await new Promise(resolve => setTimeout(resolve, 1500));
-        }
-      }
+        updateWorkerState(workerId, {
+          status: 'completed',
+          videoTitle: '任务抓取完毕 🏁',
+          fetchedCount: 0
+        });
+      };
+
+      // Kickoff concurrent workers
+      const workerPromises = Array.from({ length: workerCount }, (_, i) => runWorker(i + 1));
+      
+      // Await all workers
+      await Promise.all(workerPromises);
 
       if (!crawlActiveRef.current) {
         setProgressText('抓取任务被手动终止');
         showNotification('抓取任务已手动中止，数据已暂存', 'warning');
       } else {
-        setProgressText(`抓取结束，共成功收集并过滤到 ${allComments.length} 条评论！`);
-        showNotification(`完成！共收集并过滤到 ${allComments.length} 条评论数据`, 'success');
+        setProgressText(`所有视频采集结束，共成功收集并过滤到 ${allComments.length} 条评论！`);
+        showNotification('并发采集完成！', 'success');
       }
 
     } catch (err) {
@@ -1101,6 +1383,30 @@ function App() {
             </select>
           </div>
 
+          <div className="input-group">
+            <label className="input-label" style={{display: 'flex', alignItems: 'center', gap: '6px'}}>
+              <Layers size={13} className="text-secondary" />
+              <span>并发采集线程数</span>
+            </label>
+            <select 
+              className="input-field" 
+              value={concurrency}
+              onChange={(e) => setConcurrency(parseInt(e.target.value, 10))}
+              disabled={isCrawling}
+            >
+              <option value={1}>1 线程 (单视频顺序采集)</option>
+              <option value={2}>2 线程 (推荐，兼顾速度与防封)</option>
+              <option value={3}>3 线程 (极速，高频调用易限流)</option>
+              <option value={4}>4 线程 (高速，易被拦截建议少用)</option>
+            </select>
+            {concurrency > 2 && (
+              <div className="help-text" style={{fontSize: '0.72rem', color: 'var(--color-warning)', display: 'flex', alignItems: 'center', gap: '4px', marginTop: '2px'}}>
+                <AlertCircle size={12} style={{flexShrink: 0}} />
+                <span>⚠️ 高并发将显著增加IP限流或人机拦截风险！</span>
+              </div>
+            )}
+          </div>
+
           {/* Action buttons */}
           <div style={{display: 'flex', flexDirection: 'column', gap: '10px', marginTop: '10px'}}>
             {!isCrawling ? (
@@ -1146,6 +1452,51 @@ function App() {
                   <span>CSV 格式</span>
                 </button>
               </div>
+              {/* Save to Database Button */}
+              <button 
+                className="btn-primary" 
+                style={{
+                  marginTop: '10px', 
+                  width: '100%',
+                  background: 'linear-gradient(135deg, #10b981, #059669)',
+                  boxShadow: '0 4px 15px rgba(16, 185, 129, 0.25)'
+                }}
+                onClick={handleSaveToDatabase}
+                disabled={isSavingToDb || isCrawling}
+              >
+                {isSavingToDb ? (
+                  <>
+                    <Loader2 size={16} style={{animation: 'spin 1s linear infinite'}} />
+                    <span>正在保存到数据库...</span>
+                  </>
+                ) : (
+                  <>
+                    <Database size={16} />
+                    <span>💾 保存到数据库 ({comments.length} 条)</span>
+                  </>
+                )}
+              </button>
+              {dbSaveResult && (
+                <div style={{
+                  marginTop: '6px', 
+                  fontSize: '0.72rem', 
+                  color: '#10b981', 
+                  display: 'flex', 
+                  alignItems: 'center', 
+                  gap: '4px',
+                  padding: '6px 10px',
+                  borderRadius: 'var(--radius-sm)',
+                  backgroundColor: 'rgba(16, 185, 129, 0.08)',
+                  border: '1px solid rgba(16, 185, 129, 0.2)'
+                }}>
+                  <Save size={12} />
+                  <span>
+                    已入库 {dbSaveResult.insertedComments || 0} 条 | 
+                    跳过重复 {dbSaveResult.skippedComments || 0} 条 |
+                    关联视频 {dbSaveResult.videosProcessed || 0} 个
+                  </span>
+                </div>
+              )}
             </div>
           )}
 
@@ -1164,6 +1515,37 @@ function App() {
               <p style={{fontSize: '0.72rem', color: 'var(--color-text-muted)', marginTop: '8px', lineHeight: '1.4', wordBreak: 'break-all'}}>
                 {progressText}
               </p>
+
+              {/* Dynamic Concurrency Thread Board */}
+              {activeWorkers && activeWorkers.length > 0 && (
+                <div className="thread-board" style={{marginTop: '12px', paddingTop: '12px', borderTop: '1px dashed rgba(255,255,255,0.08)'}}>
+                  <div style={{fontSize: '0.72rem', fontWeight: '600', color: 'rgba(255,255,255,0.4)', marginBottom: '8px', display: 'flex', alignItems: 'center', gap: '4px'}}>
+                    <span>🧵 并发采集线程实时看板 ({activeWorkers.length} 线程)</span>
+                  </div>
+                  <div className="thread-grid">
+                    {activeWorkers.map((worker) => (
+                      <div className={`thread-card ${worker.status}`} key={worker.id}>
+                        <div style={{display: 'flex', alignItems: 'center', justifyContent: 'space-between', width: '100%', overflow: 'hidden'}}>
+                          <div style={{display: 'flex', alignItems: 'center', gap: '6px', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', marginRight: '8px'}}>
+                            <div className={`thread-indicator ${worker.status}`}></div>
+                            <span style={{fontSize: '0.72rem', fontWeight: 'bold', color: worker.status === 'working' ? '#00f2fe' : 'rgba(255,255,255,0.3)', flexShrink: 0}}>
+                              线程 {worker.id}
+                            </span>
+                            <span style={{fontSize: '0.72rem', color: worker.status === 'working' ? 'white' : 'var(--color-text-muted)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap'}} title={worker.videoTitle}>
+                              {worker.videoTitle}
+                            </span>
+                          </div>
+                          {worker.status === 'working' && worker.fetchedCount > 0 && (
+                            <span style={{fontSize: '0.7rem', color: '#00f2fe', fontWeight: 'bold', flexShrink: 0}}>
+                              +{worker.fetchedCount} 条
+                            </span>
+                          )}
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              )}
             </div>
           )}
         </section>
@@ -1230,7 +1612,7 @@ function App() {
           )}
 
           {/* Main Dashboard Tabs Content */}
-          {comments.length > 0 ? (
+          {(comments.length > 0 || activeTab === 'database') ? (
             <div className="glass-card" style={{flex: 1, display: 'flex', flexDirection: 'column'}}>
               {/* Tab Navigation header */}
               <div className="tabs-header">
@@ -1247,6 +1629,19 @@ function App() {
                 >
                   <BarChart2 size={16} />
                   <span>深度数据洞察 (统计图表)</span>
+                </button>
+                <button 
+                  className={`tab-btn ${activeTab === 'database' ? 'active' : ''}`}
+                  onClick={() => {
+                    setActiveTab('database');
+                    fetchDbComments(1);
+                    fetchDbStats();
+                    fetchDbVideos();
+                    fetchDbTasks();
+                  }}
+                >
+                  <Database size={16} />
+                  <span>数据库查询</span>
                 </button>
               </div>
 
@@ -1546,6 +1941,281 @@ function App() {
 
                   </div>
                 )}
+
+                {/* 3. Database Query Tab */}
+                {activeTab === 'database' && (
+                  <div style={{display: 'flex', flexDirection: 'column', gap: '16px'}}>
+                    
+                    {/* DB Stats Summary */}
+                    {dbStats && (
+                      <div style={{display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(150px, 1fr))', gap: '12px'}}>
+                        <div style={{padding: '14px', borderRadius: 'var(--radius-sm)', backgroundColor: 'rgba(16, 185, 129, 0.06)', border: '1px solid rgba(16, 185, 129, 0.15)', display: 'flex', flexDirection: 'column', gap: '4px'}}>
+                          <span style={{fontSize: '0.75rem', color: 'var(--color-text-muted)'}}>数据库评论总量</span>
+                          <span style={{fontSize: '1.6rem', fontWeight: 'bold', fontFamily: 'var(--font-display)', color: '#10b981'}}>{formatNumber(dbStats.totalComments || 0)}</span>
+                        </div>
+                        <div style={{padding: '14px', borderRadius: 'var(--radius-sm)', backgroundColor: 'rgba(0, 242, 254, 0.06)', border: '1px solid rgba(0, 242, 254, 0.15)', display: 'flex', flexDirection: 'column', gap: '4px'}}>
+                          <span style={{fontSize: '0.75rem', color: 'var(--color-text-muted)'}}>已收录视频数</span>
+                          <span style={{fontSize: '1.6rem', fontWeight: 'bold', fontFamily: 'var(--font-display)', color: '#00f2fe'}}>{dbStats.totalVideos || 0}</span>
+                        </div>
+                        <div style={{padding: '14px', borderRadius: 'var(--radius-sm)', backgroundColor: 'rgba(255, 44, 85, 0.06)', border: '1px solid rgba(255, 44, 85, 0.15)', display: 'flex', flexDirection: 'column', gap: '4px'}}>
+                          <span style={{fontSize: '0.75rem', color: 'var(--color-text-muted)'}}>累计点赞互动</span>
+                          <span style={{fontSize: '1.6rem', fontWeight: 'bold', fontFamily: 'var(--font-display)', color: 'var(--color-primary)'}}>{formatNumber(dbStats.totalLikes || 0)}</span>
+                        </div>
+                      </div>
+                    )}
+
+                    {/* Search & Filter Controls */}
+                    <div style={{display: 'flex', gap: '12px', flexWrap: 'wrap', alignItems: 'flex-end'}}>
+                      <div style={{flex: 2, minWidth: '200px'}}>
+                        <label style={{fontSize: '0.72rem', color: 'var(--color-text-muted)', marginBottom: '4px', display: 'block'}}>全文搜索评论内容</label>
+                        <div style={{position: 'relative'}}>
+                          <Search size={14} style={{position: 'absolute', left: '12px', top: '12px', color: 'var(--color-text-muted)'}} />
+                          <input 
+                            type="text" 
+                            className="input-field" 
+                            style={{paddingLeft: '36px', borderRadius: '50px', fontSize: '0.85rem'}}
+                            placeholder="输入关键词搜索评论 (支持中文全文检索)..."
+                            value={dbSearchQuery}
+                            onChange={(e) => setDbSearchQuery(e.target.value)}
+                            onKeyDown={(e) => e.key === 'Enter' && fetchDbComments(1)}
+                          />
+                        </div>
+                      </div>
+                      <div style={{flex: 1, minWidth: '120px'}}>
+                        <label style={{fontSize: '0.72rem', color: 'var(--color-text-muted)', marginBottom: '4px', display: 'block'}}>IP属地筛选</label>
+                        <input 
+                          type="text" 
+                          className="input-field" 
+                          style={{borderRadius: '50px', fontSize: '0.85rem'}}
+                          placeholder="如: 广东"
+                          value={dbSearchIp}
+                          onChange={(e) => setDbSearchIp(e.target.value)}
+                          onKeyDown={(e) => e.key === 'Enter' && fetchDbComments(1)}
+                        />
+                      </div>
+                      <div style={{flex: 1, minWidth: '120px'}}>
+                        <label style={{fontSize: '0.72rem', color: 'var(--color-text-muted)', marginBottom: '4px', display: 'block'}}>排序方式</label>
+                        <select 
+                          className="input-field" 
+                          style={{borderRadius: '50px', fontSize: '0.85rem', padding: '10px 14px'}}
+                          value={dbSortOrder}
+                          onChange={(e) => { setDbSortOrder(e.target.value); }}
+                        >
+                          <option value="digg_count">点赞数最高</option>
+                          <option value="create_time">最新评论</option>
+                          <option value="created_at">入库时间</option>
+                        </select>
+                      </div>
+                      <button 
+                        className="btn-primary" 
+                        style={{height: '44px', borderRadius: '50px', padding: '0 24px', background: 'linear-gradient(135deg, #10b981, #059669)'}}
+                        onClick={() => fetchDbComments(1)}
+                        disabled={dbIsLoading}
+                      >
+                        {dbIsLoading ? <Loader2 size={16} style={{animation: 'spin 1s linear infinite'}} /> : <Search size={16} />}
+                        <span>查询</span>
+                      </button>
+                    </div>
+
+                    {/* Video filter dropdown */}
+                    {dbVideos.length > 0 && (
+                      <div style={{display: 'flex', gap: '12px', alignItems: 'center'}}>
+                        <label style={{fontSize: '0.72rem', color: 'var(--color-text-muted)', whiteSpace: 'nowrap'}}>按视频筛选:</label>
+                        <select 
+                          className="input-field" 
+                          style={{flex: 1, borderRadius: '50px', fontSize: '0.8rem', padding: '8px 14px'}}
+                          value={dbSearchVideoId}
+                          onChange={(e) => setDbSearchVideoId(e.target.value)}
+                        >
+                          <option value="">全部视频</option>
+                          {dbVideos.map(v => (
+                            <option key={v.aweme_id} value={v.aweme_id}>
+                              [{v.aweme_id}] {(v.title || '').substring(0, 40)} ({v.comments_count || 0}条评论)
+                            </option>
+                          ))}
+                        </select>
+                      </div>
+                    )}
+
+                    {/* Results Info Bar */}
+                    <div style={{display: 'flex', justifyContent: 'space-between', alignItems: 'center', fontSize: '0.8rem', color: 'var(--color-text-muted)', padding: '0 4px'}}>
+                      <span>共检索到 <strong style={{color: '#10b981'}}>{dbTotalCount.toLocaleString()}</strong> 条结果</span>
+                      <span>第 {dbPage} / {Math.max(1, Math.ceil(dbTotalCount / dbPageSize))} 页</span>
+                    </div>
+
+                    {/* Database Comment List */}
+                    <div className="comments-list">
+                      {dbIsLoading ? (
+                        <div className="empty-state" style={{minHeight: '200px'}}>
+                          <Loader2 size={32} style={{animation: 'spin 1s linear infinite', color: '#10b981'}} />
+                          <p>正在查询数据库...</p>
+                        </div>
+                      ) : dbComments.length > 0 ? (
+                        dbComments.map((c) => (
+                          <div className="comment-card" key={`db-${c.cid || c.id}`}>
+                            <div className="commenter-avatar" style={{backgroundColor: 'rgba(16,185,129,0.1)', display: 'flex', alignItems: 'center', justifyContent: 'center', color: '#10b981'}}>
+                              <User size={18} />
+                            </div>
+                            <div className="comment-main">
+                              <div className="comment-header">
+                                <span className="comment-author-name">{c.user_nickname || '匿名用户'}</span>
+                                <span className="comment-date">{formatTimestamp(c.create_time)}</span>
+                              </div>
+                              <p className="comment-text">{c.text}</p>
+                              <div className="comment-footer">
+                                <div className="comment-action like">
+                                  <ThumbsUp size={12} />
+                                  <span>{c.digg_count || 0} 个点赞</span>
+                                </div>
+                                {c.ip_label && (
+                                  <div className="comment-action" style={{cursor: 'default'}}>
+                                    <MapPin size={12} />
+                                    <span>IP: {c.ip_label}</span>
+                                  </div>
+                                )}
+                                {c.aweme_id && (
+                                  <div 
+                                    className={`comment-action video-link-btn ${hasExtension ? 'extension-linked' : ''}`}
+                                    style={{
+                                      cursor: 'pointer', 
+                                      backgroundColor: hasExtension ? 'rgba(0, 242, 254, 0.08)' : 'rgba(255,44,85,0.08)', 
+                                      padding: '2px 8px', 
+                                      borderRadius: '4px', 
+                                      border: hasExtension ? '1px solid rgba(0, 242, 254, 0.2)' : '1px solid rgba(255,44,85,0.15)',
+                                      transition: 'all 0.2s ease',
+                                      display: 'flex',
+                                      alignItems: 'center',
+                                      gap: '4px'
+                                    }}
+                                    onClick={() => handleJumpToComment(c)}
+                                    title={hasExtension 
+                                      ? `通过浏览器助手精准定位此评论${c.video_title ? ` (来自视频: ${c.video_title})` : ''}` 
+                                      : `点击跳转到抖音作品页面并查看评论区${c.video_title ? ` (来自视频: ${c.video_title})` : ''}`
+                                    }
+                                  >
+                                    <Video size={10} style={{
+                                      display: 'inline-block', 
+                                      color: hasExtension ? '#00f2fe' : 'var(--color-primary)'
+                                    }} />
+                                    <span style={{
+                                      color: hasExtension ? '#00f2fe' : 'var(--color-primary)', 
+                                      fontSize: '0.72rem',
+                                      fontWeight: hasExtension ? 'bold' : 'normal'
+                                    }}>
+                                      {hasExtension ? '🔌 自动精准定位' : `视频 ${c.aweme_id} ↗`}
+                                    </span>
+                                  </div>
+                                )}
+                                <div 
+                                  className="comment-action" 
+                                  style={{cursor: 'pointer', marginLeft: 'auto', color: 'var(--color-danger)', opacity: 0.5}}
+                                  onClick={() => handleDbDeleteComment(c.cid)}
+                                  title="从数据库中删除此评论"
+                                >
+                                  <Trash2 size={12} />
+                                </div>
+                              </div>
+                            </div>
+                          </div>
+                        ))
+                      ) : (
+                        <div className="empty-state" style={{minHeight: '200px'}}>
+                          <Database size={40} style={{opacity: 0.3, color: '#10b981'}} />
+                          <p>{dbSearchQuery ? '未找到匹配的评论，请尝试其他关键词' : '数据库中暂无评论数据，请先爬取并保存'}</p>
+                        </div>
+                      )}
+                    </div>
+
+                    {/* Pagination Controls */}
+                    {dbTotalCount > dbPageSize && (
+                      <div style={{display: 'flex', justifyContent: 'center', alignItems: 'center', gap: '16px', padding: '12px 0'}}>
+                        <button 
+                          className="btn-secondary" 
+                          style={{padding: '8px 16px', borderRadius: '50px', fontSize: '0.8rem'}}
+                          onClick={() => fetchDbComments(dbPage - 1)}
+                          disabled={dbPage <= 1 || dbIsLoading}
+                        >
+                          <ChevronLeft size={14} />
+                          <span>上一页</span>
+                        </button>
+                        <div style={{display: 'flex', gap: '4px'}}>
+                          {(() => {
+                            const totalPages = Math.ceil(dbTotalCount / dbPageSize);
+                            const pages = [];
+                            let start = Math.max(1, dbPage - 2);
+                            let end = Math.min(totalPages, start + 4);
+                            if (end - start < 4) start = Math.max(1, end - 4);
+                            for (let i = start; i <= end; i++) {
+                              pages.push(
+                                <button
+                                  key={`page-${i}`}
+                                  style={{
+                                    width: '32px', height: '32px', borderRadius: '50%',
+                                    border: i === dbPage ? '2px solid #10b981' : '1px solid var(--border-color)',
+                                    backgroundColor: i === dbPage ? 'rgba(16,185,129,0.15)' : 'transparent',
+                                    color: i === dbPage ? '#10b981' : 'var(--color-text-muted)',
+                                    fontSize: '0.8rem', fontWeight: i === dbPage ? 'bold' : 'normal',
+                                    cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center'
+                                  }}
+                                  onClick={() => fetchDbComments(i)}
+                                  disabled={dbIsLoading}
+                                >
+                                  {i}
+                                </button>
+                              );
+                            }
+                            return pages;
+                          })()}
+                        </div>
+                        <button 
+                          className="btn-secondary" 
+                          style={{padding: '8px 16px', borderRadius: '50px', fontSize: '0.8rem'}}
+                          onClick={() => fetchDbComments(dbPage + 1)}
+                          disabled={dbPage >= Math.ceil(dbTotalCount / dbPageSize) || dbIsLoading}
+                        >
+                          <span>下一页</span>
+                          <ChevronRight size={14} />
+                        </button>
+                      </div>
+                    )}
+
+                    {/* Task History Section */}
+                    {dbTasks.length > 0 && (
+                      <div style={{marginTop: '8px', padding: '16px', borderRadius: 'var(--radius-sm)', backgroundColor: 'rgba(0,0,0,0.15)', border: '1px solid var(--border-color)'}}>
+                        <h3 style={{fontSize: '0.85rem', fontWeight: '600', color: 'white', display: 'flex', alignItems: 'center', gap: '6px', marginBottom: '12px'}}>
+                          <History size={14} style={{color: '#10b981'}} />
+                          <span>最近采集任务记录</span>
+                        </h3>
+                        <div style={{display: 'flex', flexDirection: 'column', gap: '8px'}}>
+                          {dbTasks.slice(0, 5).map((task) => (
+                            <div key={task.id} style={{
+                              display: 'flex', justifyContent: 'space-between', alignItems: 'center',
+                              padding: '10px 14px', borderRadius: 'var(--radius-sm)',
+                              backgroundColor: 'rgba(255,255,255,0.02)', border: '1px solid var(--border-color)',
+                              fontSize: '0.8rem'
+                            }}>
+                              <div style={{display: 'flex', alignItems: 'center', gap: '8px'}}>
+                                <span style={{
+                                  padding: '2px 8px', borderRadius: '10px', fontSize: '0.68rem', fontWeight: '600',
+                                  backgroundColor: task.status === 'completed' ? 'rgba(16,185,129,0.15)' : 'rgba(245,158,11,0.15)',
+                                  color: task.status === 'completed' ? '#10b981' : '#f59e0b'
+                                }}>
+                                  {task.status === 'completed' ? '已完成' : task.status === 'running' ? '进行中' : task.status}
+                                </span>
+                                <span style={{color: 'var(--color-text-muted)'}}>{task.task_type === 'search' ? '🔍 关键词搜索' : '🔗 链接批量'}</span>
+                              </div>
+                              <div style={{display: 'flex', alignItems: 'center', gap: '12px', color: 'var(--color-text-muted)'}}>
+                                <span>视频 {task.total_videos}</span>
+                                <span style={{color: '#10b981', fontWeight: '600'}}>评论 {task.total_comments}</span>
+                                <span style={{fontSize: '0.72rem'}}>{task.started_at ? new Date(task.started_at).toLocaleString('zh-CN') : ''}</span>
+                              </div>
+                            </div>
+                          ))}
+                        </div>
+                      </div>
+                    )}
+                  </div>
+                )}
               </div>
             </div>
           ) : (
@@ -1563,6 +2233,20 @@ function App() {
                 <span className="stat-item">⛓️ 批量多视频流式收集</span>
                 <span className="stat-item">🔑 唯一Key消除，完美避开重复</span>
               </div>
+              <button 
+                className="btn-secondary" 
+                style={{marginTop: '20px', padding: '12px 28px', borderRadius: '50px', fontSize: '0.9rem', border: '1px solid rgba(16,185,129,0.3)', color: '#10b981'}}
+                onClick={() => {
+                  setActiveTab('database');
+                  fetchDbComments(1);
+                  fetchDbStats();
+                  fetchDbVideos();
+                  fetchDbTasks();
+                }}
+              >
+                <Database size={18} />
+                <span>打开数据库查询</span>
+              </button>
             </div>
           )}
 
