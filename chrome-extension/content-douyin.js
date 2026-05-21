@@ -37,7 +37,37 @@ const executeLocate = (target) => {
   console.log('[定位助手] 正在执行精准定位，查找目标:', target);
 
   let attempts = 0;
-  const maxAttempts = 30; // 轮询等待，持续约 15 秒
+  const maxAttempts = 80; // 增加尝试次数，约支持持续自动加载滚动 40-50 秒
+
+  // 寻找抖音页面上实际可滚动的评论列表容器
+  const findScrollContainer = () => {
+    // 1. 尝试使用抖音官方的 e2e 标志匹配评论列表
+    let container = document.querySelector('[data-e2e="comment-list"]');
+    if (container) return container;
+
+    // 2. 尝试常见类名查找
+    container = document.querySelector('[class*="comment-list"], [class*="CommentList"], [class*="comment_list"]');
+    if (container) return container;
+
+    // 3. 动态爬树算法：从已渲染的任意评论项向上寻找首个具有滚动条属性（且 scrollHeight > clientHeight）的父节点
+    const anyComment = document.querySelector('[data-e2e="comment-item"], [class*="comment-item"], [class*="commentItem"]');
+    if (anyComment) {
+      let parent = anyComment.parentElement;
+      while (parent && parent !== document.body) {
+        const style = window.getComputedStyle(parent);
+        if (style.overflowY === 'auto' || style.overflowY === 'scroll' || parent.scrollHeight > parent.clientHeight) {
+          return parent;
+        }
+        parent = parent.parentElement;
+      }
+    }
+
+    // 4. 兜底匹配侧边栏大容器（部分剧场模式）
+    const rightPanel = document.querySelector('[class*="right-container"], [class*="sidebar"], [class*="aside"]');
+    if (rightPanel) return rightPanel;
+
+    return null;
+  };
 
   const checkAndScroll = () => {
     attempts++;
@@ -49,7 +79,7 @@ const executeLocate = (target) => {
     for (let el of allDivs) {
       const textContent = el.textContent || '';
       
-      // 方法：查找页面中同时包含作者 nickname 以及评论文本特征的 DOM 节点
+      // 鲁棒性匹配：查找页面中同时包含作者 nickname 以及评论文本特征的 DOM 节点
       if (target.nickname && textContent.includes(target.nickname) && 
           target.text && textContent.includes(target.text.slice(0, 8))) {
         
@@ -82,23 +112,26 @@ const executeLocate = (target) => {
       return true;
     }
 
-    // 如果没找到，尝试向下微滚一下评论抽屉，以触发抖音懒加载
+    // 如果当前页面没找到，自动触发向下翻页（通过滚动容器触底）
     if (attempts < maxAttempts) {
-      // 抖音的评论大容器滚动区域
-      const commentDrawer = document.querySelector('[class*="comment-list"], [class*="CommentList"], [class*="drawer"]');
-      if (commentDrawer) {
-        commentDrawer.scrollTop += 200;
+      const scrollContainer = findScrollContainer();
+      if (scrollContainer) {
+        console.log('[定位助手] 未寻得目标评论，正在自动滚动该容器以加载下一页评论:', scrollContainer);
+        // 直接滚到底部，触发抖音的 Lazy Load 加载事件
+        scrollContainer.scrollTop = scrollContainer.scrollHeight;
       } else {
-        window.scrollBy(0, 200);
+        console.log('[定位助手] 未检测到局部滚动容器，正在兜底滚动全局窗口');
+        window.scrollBy(0, 600);
       }
 
-      setTimeout(checkAndScroll, 500);
+      // 给网络加载与 DOM 渲染留出 600ms 时间
+      setTimeout(checkAndScroll, 600);
     } else {
-      console.warn('[定位助手] 未能自动定位到评论，可能是评论数据还在加载中，请尝试手动向下滚动以加载数据。');
+      console.warn('[定位助手] 达到最大搜索尝试次数，已停止自动滚动。请手动下滑。');
     }
   };
 
-  // 延迟启动，给抖音页面渲染多一点时间
+  // 延迟 1.5 秒启动，确保页面首屏数据加载完成
   setTimeout(checkAndScroll, 1500);
 };
 
