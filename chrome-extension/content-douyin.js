@@ -43,32 +43,46 @@ const executeLocate = (target) => {
 
   // 寻找抖音页面上实际可滚动的评论列表容器
   const findScrollContainer = () => {
-    // 1. 尝试使用抖音官方的 e2e 标志匹配评论列表
+    // 1. 尝试使用抖音官方的 e2e 标志匹配评论列表，检查它或它向上攀爬的父节点是否真的具备滚动属性
     let container = document.querySelector('[data-e2e="comment-list"]');
-    if (container) return container;
+    if (container) {
+      let current = container;
+      while (current && current !== document.body && current !== document.documentElement) {
+        const style = window.getComputedStyle(current);
+        if (style.overflowY === 'auto' || style.overflowY === 'scroll') {
+          return current;
+        }
+        current = current.parentElement;
+      }
+    }
 
-    // 2. 尝试常见类名查找
-    container = document.querySelector('[class*="comment-list"], [class*="CommentList"], [class*="comment_list"]');
-    if (container) return container;
-
-    // 3. 动态爬树算法：从已渲染的任意评论项向上寻找首个具有滚动条属性（且 scrollHeight > clientHeight）的父节点
+    // 2. 动态爬树算法：从已渲染的任意评论项向上寻找首个具有滚动条属性（overflowY === 'auto' | 'scroll'）的父节点
     const anyComment = document.querySelector('[data-e2e="comment-item"], [class*="comment-item"], [class*="commentItem"]');
     if (anyComment) {
       let parent = anyComment.parentElement;
       while (parent && parent !== document.body && parent !== document.documentElement) {
         const style = window.getComputedStyle(parent);
-        if (style.overflowY === 'auto' || style.overflowY === 'scroll' || parent.scrollHeight > parent.clientHeight) {
+        if (style.overflowY === 'auto' || style.overflowY === 'scroll') {
           return parent;
         }
         parent = parent.parentElement;
       }
     }
 
-    // 4. 兜底匹配侧边栏大容器（部分剧场模式）
+    // 3. 兜底匹配侧边栏大容器（部分剧场模式）
     const rightPanel = document.querySelector('[class*="right-container"], [class*="sidebar"], [class*="aside"]');
-    if (rightPanel) return rightPanel;
+    if (rightPanel) {
+      let current = rightPanel;
+      while (current && current !== document.body && current !== document.documentElement) {
+        const style = window.getComputedStyle(current);
+        if (style.overflowY === 'auto' || style.overflowY === 'scroll') {
+          return current;
+        }
+        current = current.parentElement;
+      }
+    }
 
-    // 5. 如果已经存在评论项，但是没有找到局部滚动容器，代表是整页滚动的传统布局，返回 window 作为滚动容器
+    // 4. 如果已经存在评论项，但是没有找到局部滚动容器，代表是整页滚动的传统布局，返回 window 作为滚动容器
     if (anyComment) {
       return window;
     }
@@ -165,11 +179,21 @@ const executeLocate = (target) => {
       console.log('[定位助手] 当前已渲染列表中无匹配评论，自动触底拉取下一页数据...');
       
       if (scrollContainer === window) {
-        // 整页滚动
-        window.scrollBy({ top: 600, behavior: 'smooth' });
+        // 整页滚动触底：平滑滚动至页面最底部，触发懒加载接口
+        window.scrollTo({
+          top: document.documentElement.scrollHeight || document.body.scrollHeight,
+          behavior: 'smooth'
+        });
       } else {
         // 局部容器滚动触底
-        scrollContainer.scrollTop = scrollContainer.scrollHeight;
+        if (typeof scrollContainer.scrollTo === 'function') {
+          scrollContainer.scrollTo({
+            top: scrollContainer.scrollHeight,
+            behavior: 'smooth'
+          });
+        } else {
+          scrollContainer.scrollTop = scrollContainer.scrollHeight;
+        }
       }
 
       // 给网络加载与 DOM 渲染留出 800ms 时间（整页滚动懒加载稍微慢一点，增加到800ms更稳妥）

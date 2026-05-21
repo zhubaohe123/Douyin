@@ -4,22 +4,8 @@ console.log('%c[抖音评论定位助手] 脚本已注入采集系统！', 'colo
 // 1. 在根 documentElement 上挂载属性标记，以便 React 能够通过 DOM 特征直接判定
 document.documentElement.dataset.douyinCollectorInstalled = 'true';
 
-// 2. 向页面环境注入全局变量（由于 content script 具有隔离的 JS 上下文，需要通过页面 DOM 节点注入真正的 window 变量）
-const injectScript = () => {
-  try {
-    const script = document.createElement('script');
-    script.textContent = `
-      window.__DOUYIN_COLLECTOR_EXTENSION_INSTALLED__ = true;
-      // 派发就绪自定义事件
-      window.dispatchEvent(new CustomEvent('DOUYIN_COLLECTOR_EXT_READY'));
-    `;
-    (document.head || document.documentElement).appendChild(script);
-    script.remove();
-  } catch (e) {
-    console.error('[抖音评论定位助手] 变量注入失败:', e);
-  }
-};
-injectScript();
+// 2. 主动派发就绪自定义事件（利用共享 DOM Window 对象）
+window.dispatchEvent(new CustomEvent('DOUYIN_COLLECTOR_EXT_READY'));
 
 // 3. 再次向 React 环境发送消息，确保 React 组件加载完成后能接收到
 window.addEventListener('load', () => {
