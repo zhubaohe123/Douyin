@@ -279,8 +279,16 @@ function App() {
           currentSearchId = searchData.search_id;
         }
 
-        // Support both raw Douyin 'aweme_list' and flat standard 'list' response structures
-        const videoList = searchData.aweme_list || searchData.list || [];
+        // Support Just One API V4 (nested in business_data.data.aweme_info) as well as raw Douyin aweme_list / flat list
+        let videoList = [];
+        if (searchData.business_data && Array.isArray(searchData.business_data)) {
+          videoList = searchData.business_data
+            .map(item => item?.data?.aweme_info || item?.data || item)
+            .filter(Boolean);
+        } else {
+          videoList = searchData.aweme_list || searchData.list || [];
+        }
+
         if (videoList.length === 0) {
           setProgressText(`搜索已到底，第 ${currentPage} 页无更多匹配作品`);
           break;
