@@ -38,6 +38,8 @@ const executeLocate = (target) => {
 
   let attempts = 0;
   const maxAttempts = 80; // 增加尝试次数，约支持持续自动加载滚动 40-50 秒
+  let noCommentAttempts = 0;
+  const maxNoCommentAttempts = 15; // 约支持等待和主动触发 12 秒
 
   // 寻找抖音页面上实际可滚动的评论列表容器
   const findScrollContainer = () => {
@@ -53,7 +55,7 @@ const executeLocate = (target) => {
     const anyComment = document.querySelector('[data-e2e="comment-item"], [class*="comment-item"], [class*="commentItem"]');
     if (anyComment) {
       let parent = anyComment.parentElement;
-      while (parent && parent !== document.body) {
+      while (parent && parent !== document.body && parent !== document.documentElement) {
         const style = window.getComputedStyle(parent);
         if (style.overflowY === 'auto' || style.overflowY === 'scroll' || parent.scrollHeight > parent.clientHeight) {
           return parent;
@@ -66,13 +68,59 @@ const executeLocate = (target) => {
     const rightPanel = document.querySelector('[class*="right-container"], [class*="sidebar"], [class*="aside"]');
     if (rightPanel) return rightPanel;
 
+    // 5. 如果已经存在评论项，但是没有找到局部滚动容器，代表是整页滚动的传统布局，返回 window 作为滚动容器
+    if (anyComment) {
+      return window;
+    }
+
     return null;
   };
 
   const checkAndScroll = () => {
-    attempts++;
+    // 1. 检查首条评论是否已在 DOM 中渲染
+    const anyComment = document.querySelector('[data-e2e="comment-item"], [class*="comment-item"], [class*="commentItem"]');
     
-    // 尝试找到所有的标签节点
+    if (!anyComment) {
+      noCommentAttempts++;
+      console.log(`[定位助手] 尚未检测到已渲染的评论项 (第 ${noCommentAttempts}/${maxNoCommentAttempts} 次等待)...`);
+      
+      if (noCommentAttempts < maxNoCommentAttempts) {
+        // 主动尝试唤醒评论区！
+        // a. 尝试发现并点击“评论”按钮
+        const commentButtons = document.querySelectorAll(
+          '[data-e2e="feed-comment-icon"], [data-e2e="comment-icon"], [class*="comment-icon"], [class*="commentIcon"], [class*="comment-btn"], [class*="commentBtn"]'
+        );
+        for (let btn of commentButtons) {
+          if (btn && typeof btn.click === 'function') {
+            console.log('[定位助手] 发现疑似评论区按钮，尝试自动点击打开评论面板...', btn);
+            btn.click();
+            break;
+          }
+        }
+
+        // b. 自动微量下滑页面/窗口，触发抖音的懒加载机制
+        console.log('[定位助手] 正在微调页面滚动，以触发评论组件加载...');
+        window.scrollBy({ top: 300, behavior: 'smooth' });
+
+        setTimeout(checkAndScroll, 800);
+      } else {
+        console.warn('[定位助手] 持续等待评论渲染超时，停止尝试。请手动打开评论区或下滑页面。');
+      }
+      return;
+    }
+
+    // 2. 寻找可滚动的评论容器
+    const scrollContainer = findScrollContainer();
+    if (!scrollContainer) {
+      console.log('[定位助手] 评论容器尚未完全就绪，静候就绪...');
+      setTimeout(checkAndScroll, 800);
+      return;
+    }
+
+    attempts++;
+    console.log(`[定位助手] 正在进行第 ${attempts}/${maxAttempts} 次定位检索...`);
+    
+    // 尝试找到所有的评论节点
     const allDivs = document.querySelectorAll('div, [data-e2e="comment-item"]');
     let matchedElement = null;
 
@@ -91,7 +139,7 @@ const executeLocate = (target) => {
     }
 
     if (matchedElement) {
-      console.log('[定位助手] 成功定位到评论节点！正在滚动高亮...', matchedElement);
+      console.log('[定位助手] 🎯 成功匹配并定位到评论节点！正在滚动高亮...', matchedElement);
       
       // 滚动至屏幕正中
       matchedElement.scrollIntoView({ behavior: 'smooth', block: 'center' });
@@ -112,20 +160,20 @@ const executeLocate = (target) => {
       return true;
     }
 
-    // 如果当前页面没找到，自动触发向下翻页（通过滚动容器触底）
+    // 如果当前页面没找到，自动触发向下翻页
     if (attempts < maxAttempts) {
-      const scrollContainer = findScrollContainer();
-      if (scrollContainer) {
-        console.log('[定位助手] 未寻得目标评论，正在自动滚动该容器以加载下一页评论:', scrollContainer);
-        // 直接滚到底部，触发抖音的 Lazy Load 加载事件
-        scrollContainer.scrollTop = scrollContainer.scrollHeight;
+      console.log('[定位助手] 当前已渲染列表中无匹配评论，自动触底拉取下一页数据...');
+      
+      if (scrollContainer === window) {
+        // 整页滚动
+        window.scrollBy({ top: 600, behavior: 'smooth' });
       } else {
-        console.log('[定位助手] 未检测到局部滚动容器，正在兜底滚动全局窗口');
-        window.scrollBy(0, 600);
+        // 局部容器滚动触底
+        scrollContainer.scrollTop = scrollContainer.scrollHeight;
       }
 
-      // 给网络加载与 DOM 渲染留出 600ms 时间
-      setTimeout(checkAndScroll, 600);
+      // 给网络加载与 DOM 渲染留出 800ms 时间（整页滚动懒加载稍微慢一点，增加到800ms更稳妥）
+      setTimeout(checkAndScroll, 800);
     } else {
       console.warn('[定位助手] 达到最大搜索尝试次数，已停止自动滚动。请手动下滑。');
     }
