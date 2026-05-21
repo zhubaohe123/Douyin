@@ -60,6 +60,7 @@ function App() {
   const [searchQuery, setSearchQuery] = useState('');
   const [sortOrder, setSortOrder] = useState('likes'); // 'likes' or 'time'
   const [notification, setNotification] = useState(null);
+  const [hasExtension, setHasExtension] = useState(false);
   
   // Refs to control crawling loops
   const crawlActiveRef = useRef(false);
@@ -68,6 +69,75 @@ function App() {
   const showNotification = (message, type = 'info') => {
     setNotification({ message, type });
     setTimeout(() => setNotification(null), 4000);
+  };
+
+  // 监听并对接谷歌浏览器助手插件 (Chrome Extension Handshake & Detect)
+  useEffect(() => {
+    // 1. 首次载入主动检测全局变量与 DOM 属性标记
+    if (window.__DOUYIN_COLLECTOR_EXTENSION_INSTALLED__ || 
+        document.documentElement.dataset.douyinCollectorInstalled === 'true') {
+      setHasExtension(true);
+    }
+
+    // 2. 接收来自插件 Content Script 的主动握手通知
+    const handleExtensionReady = (e) => {
+      setHasExtension(true);
+      showNotification('已成功对接抖音评论采集助手插件 🔌', 'success');
+    };
+
+    window.addEventListener('DOUYIN_COLLECTOR_EXT_READY', handleExtensionReady);
+
+    // 3. 高频轮询补偿检测（确保插件稍微延迟注入时也能无缝捕获）
+    let checkCount = 0;
+    const checkInterval = setInterval(() => {
+      checkCount++;
+      if (window.__DOUYIN_COLLECTOR_EXTENSION_INSTALLED__ || 
+          document.documentElement.dataset.douyinCollectorInstalled === 'true') {
+        setHasExtension(true);
+        clearInterval(checkInterval);
+      }
+      if (checkCount >= 5) {
+        clearInterval(checkInterval);
+      }
+    }, 1000);
+
+    return () => {
+      window.removeEventListener('DOUYIN_COLLECTOR_EXT_READY', handleExtensionReady);
+      clearInterval(checkInterval);
+    };
+  }, []);
+
+  // 触发定位事件，向浏览器助手插件广播跳转载荷
+  const handleJumpToComment = (c, parentVideoId = null) => {
+    const videoId = parentVideoId || c.video_id;
+    if (!videoId) return;
+
+    const payload = {
+      videoId: videoId,
+      commentId: String(c.cid),
+      nickname: c.user?.nickname || '未知用户',
+      text: c.text || '',
+      parentId: c.reply_id || null,
+      timestamp: Date.now()
+    };
+
+    // 1. 派发 CustomEvent 事件，以便页面注入的插件脚本拦截并转发给 background.js
+    const extEvent = new CustomEvent('DOUYIN_COLLECTOR_JUMP_COMMENT', { detail: payload });
+    window.dispatchEvent(extEvent);
+
+    // 2. 派发 window.postMessage 广播作为补充链路
+    window.postMessage({
+      source: 'douyin-comment-collector',
+      action: 'JUMP_COMMENT',
+      payload
+    }, '*');
+
+    // 3. 安全降级：由浏览器原生开启新标签页，插件会在新页面加载后嗅探并实施高亮滚动定位
+    window.open(`https://www.douyin.com/video/${videoId}`, '_blank');
+    
+    if (hasExtension) {
+      showNotification('正在通过浏览器插件定位至该评论...', 'success');
+    }
   };
 
   // Format numbers (e.g. 12800 -> 1.28w)
@@ -1249,20 +1319,28 @@ function App() {
                                 
                                 {c.video_id && (
                                   <div 
-                                    className="comment-action video-link-btn" 
+                                    className={`comment-action video-link-btn ${hasExtension ? 'extension-linked' : ''}`}
                                     style={{
                                       cursor: 'pointer', 
-                                      backgroundColor: 'rgba(255,44,85,0.08)', 
+                                      backgroundColor: hasExtension ? 'rgba(0, 242, 254, 0.08)' : 'rgba(255,44,85,0.08)', 
                                       padding: '2px 8px', 
                                       borderRadius: '4px', 
-                                      border: '1px solid rgba(255,44,85,0.15)',
+                                      border: hasExtension ? '1px solid rgba(0, 242, 254, 0.2)' : '1px solid rgba(255,44,85,0.15)',
                                       transition: 'all 0.2s ease'
                                     }}
-                                    onClick={() => window.open(`https://www.douyin.com/video/${c.video_id}`, '_blank')}
-                                    title="点击跳转到抖音作品页面并查看评论区"
+                                    onClick={() => handleJumpToComment(c)}
+                                    title={hasExtension ? "通过浏览器助手精准定位此评论" : "点击跳转到抖音作品页面并查看评论区"}
                                   >
-                                    <Video size={10} style={{marginRight: '3px', display: 'inline-block'}} />
-                                    <span style={{color: 'var(--color-primary)', fontSize: '0.72rem'}}>跳转评论区 ↗</span>
+                                    <Video size={10} style={{
+                                      marginRight: '3px', 
+                                      display: 'inline-block', 
+                                      color: hasExtension ? '#00f2fe' : 'var(--color-primary)'
+                                    }} />
+                                    <span style={{
+                                      color: hasExtension ? '#00f2fe' : 'var(--color-primary)', 
+                                      fontSize: '0.72rem',
+                                      fontWeight: hasExtension ? 'bold' : 'normal'
+                                    }}>{hasExtension ? '🔌 自动精准定位' : '跳转评论区 ↗'}</span>
                                   </div>
                                 )}
                               </div>
@@ -1300,9 +1378,36 @@ function App() {
                                                 <span>{reply.digg_count || 0}</span>
                                               </div>
                                               {reply.ip_label && (
-                                                <div>
+                                                <div style={{display: 'flex', alignItems: 'center'}}>
                                                   <MapPin size={10} style={{marginRight: '2px', display: 'inline-block'}} />
                                                   <span>{reply.ip_label}</span>
+                                                </div>
+                                              )}
+                                              {c.video_id && (
+                                                <div 
+                                                  className={`comment-action video-link-btn ${hasExtension ? 'extension-linked' : ''}`}
+                                                  style={{
+                                                    cursor: 'pointer', 
+                                                    backgroundColor: hasExtension ? 'rgba(0, 242, 254, 0.08)' : 'rgba(255,44,85,0.08)', 
+                                                    padding: '2px 6px', 
+                                                    borderRadius: '4px', 
+                                                    border: hasExtension ? '1px solid rgba(0, 242, 254, 0.2)' : '1px solid rgba(255,44,85,0.15)',
+                                                    transition: 'all 0.2s ease',
+                                                    marginLeft: 'auto'
+                                                  }}
+                                                  onClick={() => handleJumpToComment(reply, c.video_id)}
+                                                  title={hasExtension ? "通过浏览器助手精准定位此回复" : "点击跳转到抖音作品页面并查看评论区"}
+                                                >
+                                                  <Video size={10} style={{
+                                                    marginRight: '3px', 
+                                                    display: 'inline-block', 
+                                                    color: hasExtension ? '#00f2fe' : 'var(--color-primary)'
+                                                  }} />
+                                                  <span style={{
+                                                    color: hasExtension ? '#00f2fe' : 'var(--color-primary)', 
+                                                    fontSize: '0.68rem',
+                                                    fontWeight: hasExtension ? 'bold' : 'normal'
+                                                  }}>{hasExtension ? '🎯 精准定位' : '定位 ↗'}</span>
                                                 </div>
                                               )}
                                             </div>

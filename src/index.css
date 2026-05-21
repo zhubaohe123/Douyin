@@ -559,6 +559,13 @@ body {
   box-shadow: 0 2px 8px rgba(255, 44, 85, 0.15);
 }
 
+.comment-action.video-link-btn.extension-linked:hover {
+  background-color: rgba(0, 242, 254, 0.18) !important;
+  border-color: rgba(0, 242, 254, 0.45) !important;
+  transform: translateY(-1px);
+  box-shadow: 0 2px 10px rgba(0, 242, 254, 0.25) !important;
+}
+
 /* Replies section inside comments */
 .comment-replies {
   margin-top: 12px;
