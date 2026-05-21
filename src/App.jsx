@@ -485,9 +485,13 @@ function App() {
             if (item && item.cid) {
               const cidStr = String(item.cid).trim();
               if (!seenCids.has(cidStr)) {
-                // Keyword content check (case insensitive)
-                const matchesKeyword = !keywordFilter.trim() || 
-                  (item.text && item.text.toLowerCase().includes(keywordFilter.trim().toLowerCase()));
+                // Multi-keyword content check (case insensitive, supporting OR matching separated by spaces/commas)
+                const filterKeywords = keywordFilter.trim()
+                  ? keywordFilter.split(/[,，、\s|/]+/).map(k => k.trim()).filter(Boolean)
+                  : [];
+                
+                const matchesKeyword = filterKeywords.length === 0 || 
+                  filterKeywords.some(k => item.text && item.text.toLowerCase().includes(k.toLowerCase()));
                 
                 if (matchesKeyword) {
                   // Normalize item.cid as strict string
@@ -988,7 +992,7 @@ function App() {
             <input 
               type="text" 
               className="input-field" 
-              placeholder="例如: 好用、质量、买过 (只保留匹配评论)" 
+              placeholder="例如: 好用 质量 买过 (支持多词，空格/逗号/顿号隔开)" 
               value={keywordFilter}
               onChange={(e) => setKeywordFilter(e.target.value)}
               disabled={isCrawling}
@@ -1244,9 +1248,21 @@ function App() {
                                 )}
                                 
                                 {c.video_id && (
-                                  <div className="comment-action" style={{cursor: 'default', backgroundColor: 'rgba(255,44,85,0.08)', padding: '2px 8px', borderRadius: '4px', border: '1px solid rgba(255,44,85,0.15)'}}>
+                                  <div 
+                                    className="comment-action video-link-btn" 
+                                    style={{
+                                      cursor: 'pointer', 
+                                      backgroundColor: 'rgba(255,44,85,0.08)', 
+                                      padding: '2px 8px', 
+                                      borderRadius: '4px', 
+                                      border: '1px solid rgba(255,44,85,0.15)',
+                                      transition: 'all 0.2s ease'
+                                    }}
+                                    onClick={() => window.open(`https://www.douyin.com/video/${c.video_id}`, '_blank')}
+                                    title="点击跳转到抖音作品页面并查看评论区"
+                                  >
                                     <Video size={10} style={{marginRight: '3px', display: 'inline-block'}} />
-                                    <span style={{color: 'var(--color-primary)', fontSize: '0.72rem'}}>作品: {c.video_id}</span>
+                                    <span style={{color: 'var(--color-primary)', fontSize: '0.72rem'}}>跳转评论区 ↗</span>
                                   </div>
                                 )}
                               </div>
