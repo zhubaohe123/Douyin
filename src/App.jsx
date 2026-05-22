@@ -46,6 +46,11 @@ function App() {
   const [searchApiUrl, setSearchApiUrl] = useState('http://localhost:8000');
   const [searchPages, setSearchPages] = useState(1); // 1 to 5 pages
   
+  // 评论 API 接口配置状态 (本地默认 / TikHub 开发者)
+  const [commentApiType, setCommentApiType] = useState(() => localStorage.getItem('comment_api_type') || 'local');
+  const [tikhubToken, setTikhubToken] = useState(() => localStorage.getItem('tikhub_token') || '');
+  const [tikhubApiUrl, setTikhubApiUrl] = useState(() => localStorage.getItem('tikhub_api_url') || 'https://api.tikhub.dev');
+
   // Crawler Execution State
   const [isCrawling, setIsCrawling] = useState(false);
   const [stopRequested, setStopRequested] = useState(false);
@@ -67,6 +72,19 @@ function App() {
   const [sortOrder, setSortOrder] = useState('likes'); // 'likes' or 'time'
   const [notification, setNotification] = useState(null);
   const [hasExtension, setHasExtension] = useState(false);
+
+  // 持久化保存评论 API 配置
+  useEffect(() => {
+    localStorage.setItem('comment_api_type', commentApiType);
+  }, [commentApiType]);
+
+  useEffect(() => {
+    localStorage.setItem('tikhub_token', tikhubToken);
+  }, [tikhubToken]);
+
+  useEffect(() => {
+    localStorage.setItem('tikhub_api_url', tikhubApiUrl);
+  }, [tikhubApiUrl]);
   
   // Database State
   const [isSavingToDb, setIsSavingToDb] = useState(false);
@@ -804,10 +822,23 @@ function App() {
             setProgressText(`[线程 ${workerId}] 抓取 "${details.title.substring(0, 10)}..." (已获取: ${videoCommentsFetched} 条, 总抓取: ${allComments.length} 条)`);
 
             const count = 20;
-            const url = `/api/douyin/web/fetch_video_comments?aweme_id=${currentVideo.id}&cursor=${cursor}&count=${count}`;
+            let url;
+            const headers = {};
+
+            if (commentApiType === 'tikhub') {
+              url = `/api/db/tikhub/fetch_video_comments?aweme_id=${currentVideo.id}&cursor=${cursor}&count=${count}`;
+              if (tikhubToken) {
+                headers['Authorization'] = `Bearer ${tikhubToken}`;
+              }
+              if (tikhubApiUrl) {
+                headers['X-TikHub-API-URL'] = tikhubApiUrl;
+              }
+            } else {
+              url = `/api/douyin/web/fetch_video_comments?aweme_id=${currentVideo.id}&cursor=${cursor}&count=${count}`;
+            }
 
             try {
-              const response = await fetch(url);
+              const response = await fetch(url, { headers });
               if (!response.ok) {
                 console.error(`线程 ${workerId} 请求失败`);
                 break;
@@ -1336,6 +1367,76 @@ function App() {
                 <span>⚠️ 高并发将显著增加IP限流或人机拦截风险！</span>
               </div>
             )}
+          </div>
+
+          {/* 评论数据 API 配置 */}
+          <div className="input-group" style={{ 
+            marginTop: '15px', 
+            padding: '12px', 
+            borderRadius: 'var(--radius-sm)', 
+            border: '1px solid rgba(255,255,255,0.08)', 
+            background: 'rgba(255,255,255,0.02)' 
+          }}>
+            <label className="input-label" style={{ 
+              display: 'flex', 
+              alignItems: 'center', 
+              gap: '6px', 
+              fontSize: '0.8rem', 
+              color: 'var(--color-primary)', 
+              fontWeight: '600',
+              marginBottom: '10px'
+            }}>
+              <Database size={13} />
+              <span>评论数据 API 配置</span>
+            </label>
+            
+            <div style={{ display: 'flex', flexDirection: 'column', gap: '10px' }}>
+              <div>
+                <label className="input-label" style={{ fontSize: '0.75rem', color: 'var(--color-text-muted)', marginBottom: '4px', display: 'block' }}>接口服务类型</label>
+                <select 
+                  className="input-field" 
+                  style={{ fontSize: '0.8rem', padding: '6px 10px' }}
+                  value={commentApiType}
+                  onChange={(e) => setCommentApiType(e.target.value)}
+                  disabled={isCrawling}
+                >
+                  <option value="local">本地默认代理 (http://10.11.1.88)</option>
+                  <option value="tikhub">TikHub 开发者接口 (tikhub.dev)</option>
+                </select>
+              </div>
+
+              {commentApiType === 'tikhub' && (
+                <div style={{ animation: 'fadeIn 0.3s ease', display: 'flex', flexDirection: 'column', gap: '8px' }}>
+                  <div>
+                    <label className="input-label" style={{ fontSize: '0.75rem', color: 'var(--color-text-muted)', marginBottom: '4px', display: 'block' }}>TikHub 接口地址</label>
+                    <input 
+                      type="text" 
+                      className="input-field"
+                      style={{ fontSize: '0.8rem', padding: '6px 10px', fontFamily: 'monospace' }}
+                      placeholder="https://api.tikhub.dev" 
+                      value={tikhubApiUrl}
+                      onChange={(e) => setTikhubApiUrl(e.target.value)}
+                      disabled={isCrawling}
+                    />
+                  </div>
+                  <div>
+                    <label className="input-label" style={{ fontSize: '0.75rem', color: 'var(--color-text-muted)', marginBottom: '4px', display: 'block' }}>TikHub 授权 Token</label>
+                    <input 
+                      type="password" 
+                      className="input-field"
+                      style={{ fontSize: '0.8rem', padding: '6px 10px', fontFamily: 'monospace' }}
+                      placeholder="输入您的 TikHub Token" 
+                      value={tikhubToken}
+                      onChange={(e) => setTikhubToken(e.target.value)}
+                      disabled={isCrawling}
+                    />
+                    <div className="help-text" style={{ fontSize: '0.7rem', color: 'var(--color-text-muted)', marginTop: '2px' }}>
+                      在 tikhub.dev 注册获取 Authorization Token
+                    </div>
+                  </div>
+                </div>
+              )}
+            </div>
           </div>
 
           {/* Action buttons */}
