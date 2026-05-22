@@ -17,7 +17,7 @@ const router = Router();
  */
 router.get('/api/db/tikhub/fetch_video_comments', async (req, res) => {
   try {
-    const { aweme_id, cursor = 0, count = 20 } = req.query;
+    const { aweme_id, cursor = 0, count = 200 } = req.query;
 
     if (!aweme_id) {
       return res.status(400).json({

@@ -821,7 +821,7 @@ function App() {
 
             setProgressText(`[线程 ${workerId}] 抓取 "${details.title.substring(0, 10)}..." (已获取: ${videoCommentsFetched} 条, 总抓取: ${allComments.length} 条)`);
 
-            const count = 20;
+            const count = commentApiType === 'tikhub' ? 200 : 20;
             let url;
             const headers = {};
 
