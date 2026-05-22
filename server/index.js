@@ -10,6 +10,7 @@ import commentsRoutes from './routes/comments.js';
 import videosRoutes from './routes/videos.js';
 import tasksRoutes from './routes/tasks.js';
 import tikhubRoutes from './routes/tikhub.js';
+import wtfRoutes from './routes/wtf.js';
 
 // 导入模型（触发关联定义）
 import './models/index.js';
@@ -39,6 +40,7 @@ app.use(commentsRoutes);
 app.use(videosRoutes);
 app.use(tasksRoutes);
 app.use(tikhubRoutes);
+app.use(wtfRoutes);
 
 // 健康检查
 app.get('/api/db/health', (req, res) => {

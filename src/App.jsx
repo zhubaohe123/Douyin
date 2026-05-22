@@ -46,10 +46,13 @@ function App() {
   const [searchApiUrl, setSearchApiUrl] = useState('http://localhost:8000');
   const [searchPages, setSearchPages] = useState(1); // 1 to 5 pages
   
-  // 评论 API 接口配置状态 (本地默认 / TikHub 开发者)
+  // 评论 API 接口配置状态 (本地默认 / TikHub 开发者 / douyin.wtf 开发者)
   const [commentApiType, setCommentApiType] = useState(() => localStorage.getItem('comment_api_type') || 'tikhub');
   const [tikhubToken, setTikhubToken] = useState(() => localStorage.getItem('tikhub_token') || 'pawjW+xB3VyVu2qKOY+67w7nB2XWB5pF4DiA7U6hR8GXj2mwK0yeWAudDQ==');
   const [tikhubApiUrl, setTikhubApiUrl] = useState(() => localStorage.getItem('tikhub_api_url') || 'https://api.tikhub.dev');
+  
+  const [wtfToken, setWtfToken] = useState(() => localStorage.getItem('wtf_token') || 'pawjW+xB3VyVu2qKOY+67w7nB2XWB5pF4DiA7U6hR8GXj2mwK0yeWAudDQ==');
+  const [wtfApiUrl, setWtfApiUrl] = useState(() => localStorage.getItem('wtf_api_url') || 'https://douyin.wtf');
 
   // Crawler Execution State
   const [isCrawling, setIsCrawling] = useState(false);
@@ -85,6 +88,14 @@ function App() {
   useEffect(() => {
     localStorage.setItem('tikhub_api_url', tikhubApiUrl);
   }, [tikhubApiUrl]);
+
+  useEffect(() => {
+    localStorage.setItem('wtf_token', wtfToken);
+  }, [wtfToken]);
+
+  useEffect(() => {
+    localStorage.setItem('wtf_api_url', wtfApiUrl);
+  }, [wtfApiUrl]);
   
   // Database State
   const [isSavingToDb, setIsSavingToDb] = useState(false);
@@ -821,7 +832,7 @@ function App() {
 
             setProgressText(`[线程 ${workerId}] 抓取 "${details.title.substring(0, 10)}..." (已获取: ${videoCommentsFetched} 条, 总抓取: ${allComments.length} 条)`);
 
-            const count = commentApiType === 'tikhub' ? 200 : 20;
+            const count = commentApiType === 'tikhub' ? 200 : (commentApiType === 'wtf' ? 50 : 20);
             let url;
             const headers = {};
 
@@ -832,6 +843,14 @@ function App() {
               }
               if (tikhubApiUrl) {
                 headers['X-TikHub-API-URL'] = tikhubApiUrl;
+              }
+            } else if (commentApiType === 'wtf') {
+              url = `/api/db/wtf/fetch_video_comments?aweme_id=${currentVideo.id}&cursor=${cursor}&count=${count}`;
+              if (wtfToken) {
+                headers['Authorization'] = `Bearer ${wtfToken}`;
+              }
+              if (wtfApiUrl) {
+                headers['X-WTF-API-URL'] = wtfApiUrl;
               }
             } else {
               url = `/api/douyin/web/fetch_video_comments?aweme_id=${currentVideo.id}&cursor=${cursor}&count=${count}`;
@@ -1402,6 +1421,7 @@ function App() {
                 >
                   <option value="local">本地默认代理 (http://10.11.1.88)</option>
                   <option value="tikhub">TikHub 开发者接口 (tikhub.dev)</option>
+                  <option value="wtf">douyin.wtf 开发者接口 (douyin.wtf)</option>
                 </select>
               </div>
 
@@ -1432,6 +1452,38 @@ function App() {
                     />
                     <div className="help-text" style={{ fontSize: '0.7rem', color: 'var(--color-text-muted)', marginTop: '2px' }}>
                       在 tikhub.dev 注册获取 Authorization Token
+                    </div>
+                  </div>
+                </div>
+              )}
+
+              {commentApiType === 'wtf' && (
+                <div style={{ animation: 'fadeIn 0.3s ease', display: 'flex', flexDirection: 'column', gap: '8px' }}>
+                  <div>
+                    <label className="input-label" style={{ fontSize: '0.75rem', color: 'var(--color-text-muted)', marginBottom: '4px', display: 'block' }}>douyin.wtf 接口地址</label>
+                    <input 
+                      type="text" 
+                      className="input-field"
+                      style={{ fontSize: '0.8rem', padding: '6px 10px', fontFamily: 'monospace' }}
+                      placeholder="https://douyin.wtf" 
+                      value={wtfApiUrl}
+                      onChange={(e) => setWtfApiUrl(e.target.value)}
+                      disabled={isCrawling}
+                    />
+                  </div>
+                  <div>
+                    <label className="input-label" style={{ fontSize: '0.75rem', color: 'var(--color-text-muted)', marginBottom: '4px', display: 'block' }}>douyin.wtf 授权 Token</label>
+                    <input 
+                      type="password" 
+                      className="input-field"
+                      style={{ fontSize: '0.8rem', padding: '6px 10px', fontFamily: 'monospace' }}
+                      placeholder="输入您的 douyin.wtf Token" 
+                      value={wtfToken}
+                      onChange={(e) => setWtfToken(e.target.value)}
+                      disabled={isCrawling}
+                    />
+                    <div className="help-text" style={{ fontSize: '0.7rem', color: 'var(--color-text-muted)', marginTop: '2px' }}>
+                      在 douyin.wtf 注册获取 Authorization Token
                     </div>
                   </div>
                 </div>
