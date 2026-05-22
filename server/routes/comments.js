@@ -26,6 +26,7 @@ router.get('/api/db/comments', async (req, res) => {
       ip_label,
       start_date,
       end_date,
+      is_marked,
       sort = 'create_time',
       order = 'desc',
       page = 1,
@@ -39,6 +40,9 @@ router.get('/api/db/comments', async (req, res) => {
     }
     if (ip_label) {
       where.ip_label = ip_label;
+    }
+    if (is_marked !== undefined) {
+      where.is_marked = is_marked === 'true' || is_marked === '1' || is_marked === true;
     }
     if (start_date || end_date) {
       where.create_time = {};
@@ -97,7 +101,7 @@ router.get('/api/db/comments', async (req, res) => {
  */
 router.get('/api/db/comments/search', async (req, res) => {
   try {
-    const { q, aweme_id, page = 1, size = 20 } = req.query;
+    const { q, aweme_id, is_marked, page = 1, size = 20 } = req.query;
 
     if (!q || !q.trim()) {
       return res.status(400).json({ error: '缺少搜索关键词 q' });
@@ -116,6 +120,12 @@ router.get('/api/db/comments/search', async (req, res) => {
     if (aweme_id) {
       whereClause += ' AND aweme_id = :aweme_id';
       replacements.aweme_id = aweme_id;
+    }
+
+    if (is_marked !== undefined) {
+      const isMarkedVal = is_marked === 'true' || is_marked === '1' || is_marked === true;
+      whereClause += ' AND is_marked = :is_marked';
+      replacements.is_marked = isMarkedVal ? 1 : 0;
     }
 
     // 查询总数
@@ -253,6 +263,38 @@ router.delete('/api/db/comments/:cid', async (req, res) => {
   } catch (error) {
     console.error('❌ 删除评论失败:', error);
     res.status(500).json({ error: '删除失败', message: error.message });
+  }
+});
+
+/**
+ * PUT /api/db/comments/:cid/toggle-mark
+ * 切换评论的标记状态（重要/收藏）
+ */
+router.put('/api/db/comments/:cid/toggle-mark', async (req, res) => {
+  try {
+    const { cid } = req.params;
+
+    const comment = await Comment.findOne({ where: { cid } });
+
+    if (!comment) {
+      return res.status(404).json({ error: '评论不存在', cid });
+    }
+
+    const newMarkedState = !comment.is_marked;
+    await Comment.update(
+      { is_marked: newMarkedState },
+      { where: { cid } }
+    );
+
+    res.json({
+      success: true,
+      message: newMarkedState ? '评论已标记' : '已取消标记',
+      cid,
+      is_marked: newMarkedState,
+    });
+  } catch (error) {
+    console.error('❌ 切换评论标记状态失败:', error);
+    res.status(500).json({ error: '操作失败', message: error.message });
   }
 });
 

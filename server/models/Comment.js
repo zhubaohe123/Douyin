@@ -69,6 +69,11 @@ const Comment = sequelize.define('Comment', {
     allowNull: true,
     comment: '关联的采集任务ID',
   },
+  is_marked: {
+    type: DataTypes.BOOLEAN,
+    defaultValue: false,
+    comment: '是否已标记为重要/收藏',
+  },
 }, {
   tableName: 'comments',
   timestamps: true,
@@ -80,6 +85,7 @@ const Comment = sequelize.define('Comment', {
     { fields: ['ip_label'] },
     { fields: ['create_time'] },
     { fields: ['crawl_task_id'] },
+    { fields: ['is_marked'] },
     // FULLTEXT 索引需要在 sync 后通过原始 SQL 创建
   ],
 });

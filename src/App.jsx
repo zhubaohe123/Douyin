@@ -26,7 +26,8 @@ import {
   ChevronRight,
   Loader2,
   History,
-  Trash2
+  Trash2,
+  Bookmark
 } from 'lucide-react';
 import * as XLSX from 'xlsx';
 import './App.css';
@@ -73,6 +74,7 @@ function App() {
   const [activeTab, setActiveTab] = useState('comments');
   const [searchQuery, setSearchQuery] = useState('');
   const [sortOrder, setSortOrder] = useState('likes'); // 'likes' or 'time'
+  const [showMarkedOnly, setShowMarkedOnly] = useState(false);
   const [notification, setNotification] = useState(null);
   const [hasExtension, setHasExtension] = useState(false);
 
@@ -104,6 +106,7 @@ function App() {
   const [dbSearchQuery, setDbSearchQuery] = useState('');
   const [dbSearchIp, setDbSearchIp] = useState('');
   const [dbSearchVideoId, setDbSearchVideoId] = useState('');
+  const [dbShowMarkedOnly, setDbShowMarkedOnly] = useState(false);
   const [dbComments, setDbComments] = useState([]);
   const [dbTotalCount, setDbTotalCount] = useState(0);
   const [dbPage, setDbPage] = useState(1);
@@ -516,7 +519,8 @@ function App() {
           digg_count: c.digg_count || 0,
           reply_count: c.reply_comment_total || c.reply_count || 0,
           ip_label: c.ip_label || null,
-          create_time: c.create_time || null
+          create_time: c.create_time || null,
+          is_marked: !!c.is_marked
         })),
         task: {
           task_type: crawlMode,
@@ -563,6 +567,7 @@ function App() {
       });
       if (dbSearchVideoId) params.append('aweme_id', dbSearchVideoId);
       if (dbSearchIp) params.append('ip_label', dbSearchIp);
+      if (dbShowMarkedOnly) params.append('is_marked', 'true');
 
       let url;
       if (dbSearchQuery.trim()) {
@@ -586,14 +591,14 @@ function App() {
     } finally {
       setDbIsLoading(false);
     }
-  }, [dbSearchQuery, dbSearchVideoId, dbSearchIp, dbSortOrder, dbPageSize]);
+  }, [dbSearchQuery, dbSearchVideoId, dbSearchIp, dbSortOrder, dbShowMarkedOnly, dbPageSize]);
 
   // 监听数据库筛选条件与排序变化，自动触发查询
   useEffect(() => {
     if (activeTab === 'database') {
       fetchDbComments(1);
     }
-  }, [dbSearchVideoId, dbSortOrder, activeTab, fetchDbComments]);
+  }, [dbSearchVideoId, dbSortOrder, dbShowMarkedOnly, activeTab, fetchDbComments]);
 
   // Fetch database stats
   const fetchDbStats = async () => {
@@ -649,6 +654,56 @@ function App() {
       fetchDbComments(dbPage);
     } catch (err) {
       showNotification('删除失败', 'error');
+    }
+  };
+
+  // Toggle comment marked state (unified)
+  const handleToggleCommentMark = async (c) => {
+    const cid = String(c.cid);
+    const originalMarked = !!c.is_marked;
+    const nextMarked = !originalMarked;
+
+    // 1. Immediately update React state for responsive visual response
+    setComments(prev =>
+      prev.map(item =>
+        String(item.cid) === cid
+          ? { ...item, is_marked: nextMarked }
+          : item
+      )
+    );
+
+    setDbComments(prev =>
+      prev.map(item =>
+        String(item.cid) === cid
+          ? { ...item, is_marked: nextMarked }
+          : item
+      )
+    );
+
+    try {
+      // 2. Safely PUT update in MySQL database via toggle route
+      const response = await fetch(`/api/db/comments/${cid}/toggle-mark`, {
+        method: 'PUT',
+      });
+
+      if (response.ok) {
+        const result = await response.json();
+        // Consolidate exact database-persisted marked state
+        const finalMarked = !!result.is_marked;
+        setComments(prev =>
+          prev.map(item =>
+            String(item.cid) === cid ? { ...item, is_marked: finalMarked } : item
+          )
+        );
+        setDbComments(prev =>
+          prev.map(item =>
+            String(item.cid) === cid ? { ...item, is_marked: finalMarked } : item
+          )
+        );
+      }
+    } catch (err) {
+      // We expect this catch on unsaved comments, which we silently ignore
+      console.log('Unsaved comment toggle, retained as local marked state:', err);
     }
   };
 
@@ -1044,6 +1099,7 @@ function App() {
   // Local comments filter & sorting
   const filteredComments = comments
     .filter(c => {
+      if (showMarkedOnly && !c.is_marked) return false;
       if (!searchQuery) return true;
       const query = searchQuery.toLowerCase();
       const nickname = (c.user?.nickname || '').toLowerCase();
@@ -1735,7 +1791,7 @@ function App() {
                   <div style={{display: 'flex', flexDirection: 'column', gap: '20px'}}>
                     
                     {/* Search & Sort Panel */}
-                    <div style={{display: 'flex', gap: '16px', flexWrap: 'wrap'}}>
+                    <div style={{display: 'flex', gap: '16px', flexWrap: 'wrap', alignItems: 'center'}}>
                       <div style={{position: 'relative', flex: 1, minWidth: '260px'}}>
                         <Search size={16} style={{position: 'absolute', left: '14px', top: '14px', color: 'var(--color-text-muted)'}} />
                         <input 
@@ -1748,17 +1804,41 @@ function App() {
                         />
                       </div>
                       
-                      <div style={{display: 'flex', alignItems: 'center', gap: '10px'}}>
-                        <span style={{fontSize: '0.8rem', color: 'var(--color-text-muted)'}}>排序方式</span>
-                        <select 
-                          className="input-field" 
-                          style={{width: '140px', borderRadius: '50px', padding: '8px 16px', fontSize: '0.8rem', backgroundColor: 'rgba(255,255,255,0.02)'}}
-                          value={sortOrder}
-                          onChange={(e) => setSortOrder(e.target.value)}
+                      <div style={{display: 'flex', alignItems: 'center', gap: '16px'}}>
+                        <div style={{display: 'flex', alignItems: 'center', gap: '10px'}}>
+                          <span style={{fontSize: '0.8rem', color: 'var(--color-text-muted)'}}>排序方式</span>
+                          <select 
+                            className="input-field" 
+                            style={{width: '140px', borderRadius: '50px', padding: '8px 16px', fontSize: '0.8rem', backgroundColor: 'rgba(255,255,255,0.02)'}}
+                            value={sortOrder}
+                            onChange={(e) => setSortOrder(e.target.value)}
+                          >
+                            <option value="likes">点赞数最高</option>
+                            <option value="time">最新发表</option>
+                          </select>
+                        </div>
+
+                        <button
+                          type="button"
+                          onClick={() => setShowMarkedOnly(prev => !prev)}
+                          style={{
+                            display: 'flex',
+                            alignItems: 'center',
+                            gap: '6px',
+                            padding: '8px 16px',
+                            borderRadius: '50px',
+                            fontSize: '0.8rem',
+                            cursor: 'pointer',
+                            transition: 'all 0.2s ease',
+                            backgroundColor: showMarkedOnly ? 'rgba(245, 158, 11, 0.15)' : 'rgba(255, 255, 255, 0.02)',
+                            border: showMarkedOnly ? '1px solid rgba(245, 158, 11, 0.4)' : '1px solid rgba(255, 255, 255, 0.1)',
+                            color: showMarkedOnly ? '#f59e0b' : 'var(--color-text-muted)',
+                            whiteSpace: 'nowrap'
+                          }}
                         >
-                          <option value="likes">点赞数最高</option>
-                          <option value="time">最新发表</option>
-                        </select>
+                          <Bookmark size={14} fill={showMarkedOnly ? '#f59e0b' : 'none'} />
+                          <span>仅显示标记评论</span>
+                        </button>
                       </div>
                     </div>
 
@@ -1821,6 +1901,29 @@ function App() {
                                     }}>{hasExtension ? '🔌 自动精准定位' : '跳转评论区 ↗'}</span>
                                   </div>
                                 )}
+
+                                <button
+                                  type="button"
+                                  onClick={() => handleToggleCommentMark(c)}
+                                  className={`comment-action mark-btn ${c.is_marked ? 'active' : ''}`}
+                                  style={{
+                                    cursor: 'pointer',
+                                    backgroundColor: c.is_marked ? 'rgba(245,158,11,0.12)' : 'transparent',
+                                    padding: '2px 8px',
+                                    borderRadius: '4px',
+                                    border: c.is_marked ? '1px solid rgba(245,158,11,0.3)' : '1px solid transparent',
+                                    color: c.is_marked ? '#f59e0b' : 'var(--color-text-muted)',
+                                    display: 'flex',
+                                    alignItems: 'center',
+                                    gap: '4px',
+                                    marginLeft: '8px',
+                                    transition: 'all 0.2s ease'
+                                  }}
+                                  title={c.is_marked ? "取消标记评论" : "标记为重要/收藏评论"}
+                                >
+                                  <Bookmark size={11} fill={c.is_marked ? '#f59e0b' : 'none'} />
+                                  <span>{c.is_marked ? '已标记' : '标记'}</span>
+                                </button>
                               </div>
 
                               {/* Nested replies if available (safely deduplicated by reply.cid) */}
@@ -2089,6 +2192,31 @@ function App() {
                           <option value="created_at">入库时间</option>
                         </select>
                       </div>
+                      <div style={{display: 'flex', flexDirection: 'column', gap: '4px'}}>
+                        <label style={{fontSize: '0.72rem', color: 'var(--color-text-muted)', display: 'block'}}>标记筛选</label>
+                        <button
+                          type="button"
+                          onClick={() => setDbShowMarkedOnly(prev => !prev)}
+                          style={{
+                            display: 'flex',
+                            alignItems: 'center',
+                            gap: '6px',
+                            height: '44px',
+                            padding: '0 16px',
+                            borderRadius: '50px',
+                            fontSize: '0.85rem',
+                            cursor: 'pointer',
+                            transition: 'all 0.2s ease',
+                            backgroundColor: dbShowMarkedOnly ? 'rgba(245, 158, 11, 0.15)' : 'rgba(255, 255, 255, 0.02)',
+                            border: dbShowMarkedOnly ? '1px solid rgba(245, 158, 11, 0.4)' : '1px solid rgba(255, 255, 255, 0.1)',
+                            color: dbShowMarkedOnly ? '#f59e0b' : 'var(--color-text-muted)',
+                            whiteSpace: 'nowrap'
+                          }}
+                        >
+                          <Bookmark size={14} fill={dbShowMarkedOnly ? '#f59e0b' : 'none'} />
+                          <span>仅显示标记评论</span>
+                        </button>
+                      </div>
                       <button 
                         className="btn-primary" 
                         style={{height: '44px', borderRadius: '50px', padding: '0 24px', background: 'linear-gradient(135deg, #10b981, #059669)'}}
@@ -2194,6 +2322,28 @@ function App() {
                                     </div>
                                   );
                                 })()}
+                                <button
+                                  type="button"
+                                  onClick={() => handleToggleCommentMark(c)}
+                                  className={`comment-action mark-btn ${c.is_marked ? 'active' : ''}`}
+                                  style={{
+                                    cursor: 'pointer',
+                                    backgroundColor: c.is_marked ? 'rgba(245,158,11,0.12)' : 'transparent',
+                                    padding: '2px 8px',
+                                    borderRadius: '4px',
+                                    border: c.is_marked ? '1px solid rgba(245,158,11,0.3)' : '1px solid transparent',
+                                    color: c.is_marked ? '#f59e0b' : 'var(--color-text-muted)',
+                                    display: 'flex',
+                                    alignItems: 'center',
+                                    gap: '4px',
+                                    marginLeft: '8px',
+                                    transition: 'all 0.2s ease'
+                                  }}
+                                  title={c.is_marked ? "取消标记评论" : "标记为重要/收藏评论"}
+                                >
+                                  <Bookmark size={11} fill={c.is_marked ? '#f59e0b' : 'none'} />
+                                  <span>{c.is_marked ? '已标记' : '标记'}</span>
+                                </button>
                                 <div 
                                   className="comment-action" 
                                   style={{cursor: 'pointer', marginLeft: 'auto', color: 'var(--color-danger)', opacity: 0.5}}

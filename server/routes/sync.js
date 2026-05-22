@@ -102,6 +102,7 @@ router.post('/api/db/sync/comments', async (req, res) => {
         ip_label: c.ip_label || null,
         create_time: c.create_time || null,
         crawl_task_id: taskRecord ? taskRecord.id : (c.crawl_task_id || null),
+        is_marked: c.is_marked || false,
       }));
 
       // ignoreDuplicates 对应 INSERT IGNORE

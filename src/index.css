@@ -566,6 +566,20 @@ body {
   box-shadow: 0 2px 10px rgba(0, 242, 254, 0.25) !important;
 }
 
+.comment-action.mark-btn:hover {
+  background-color: rgba(245, 158, 11, 0.08) !important;
+  border-color: rgba(245, 158, 11, 0.2) !important;
+  color: #f59e0b !important;
+}
+
+.comment-action.mark-btn.active:hover {
+  background-color: rgba(245, 158, 11, 0.2) !important;
+  border-color: rgba(245, 158, 11, 0.5) !important;
+  color: #f59e0b !important;
+  box-shadow: 0 2px 8px rgba(245, 158, 11, 0.2);
+}
+
+
 /* Replies section inside comments */
 .comment-replies {
   margin-top: 12px;
