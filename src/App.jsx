@@ -58,6 +58,7 @@ function App() {
 
   // Data State
   const [videoInfo, setVideoInfo] = useState(null);
+  const [crawledVideosMap, setCrawledVideosMap] = useState({});
   const [comments, setComments] = useState([]);
   
   // UI States
@@ -449,31 +450,44 @@ function App() {
     setDbSaveResult(null);
 
     try {
+      const uniqueVideoIds = [...new Set(comments.map(c => String(c.video_id || c.aweme_id)))].filter(Boolean);
+      
+      const videosPayload = uniqueVideoIds.map(vid => {
+        const cached = crawledVideosMap[vid];
+        if (cached) {
+          return cached;
+        }
+        // Fallback reconstruction
+        const matchingComment = comments.find(c => String(c.video_id) === vid || String(c.aweme_id) === vid);
+        const title = matchingComment ? (matchingComment.video_title || `视频作品 #${vid}`) : `视频作品 #${vid}`;
+        return {
+          aweme_id: vid,
+          title: title,
+          cover_url: '',
+          author_name: '抖音创作者',
+          author_avatar: '',
+          likes: 0,
+          comments_count: 0,
+          shares: 0,
+          collects: 0
+        };
+      });
+
       const payload = {
-        video: videoInfo ? {
-          aweme_id: videoInfo.awemeId || '',
-          title: videoInfo.title || '',
-          cover_url: videoInfo.cover || '',
-          author_name: videoInfo.authorName || '',
-          author_avatar: videoInfo.authorAvatar || '',
-          likes: videoInfo.likes || 0,
-          comments_count: videoInfo.commentsCount || 0,
-          shares: videoInfo.shares || 0,
-          collects: videoInfo.collects || 0
-        } : null,
+        video: videosPayload[0] || null, // 保持向后兼容
+        videos: videosPayload,           // 发送全部已抓取的视频进行批量同步
         comments: comments.map(c => ({
           cid: String(c.cid),
-          aweme_id: c.video_id || '',
-          parent_comment_id: c.reply_id || null,
-          user_nickname: c.user?.nickname || '未知用户',
-          user_id: c.user?.uid || c.user?.id || null,
-          user_avatar: c.user?.avatar_thumb?.url_list?.[0] || '',
+          aweme_id: c.video_id || c.aweme_id || '',
+          parent_comment_id: c.reply_id || c.parent_comment_id || null,
+          user_nickname: c.user?.nickname || c.user_nickname || '未知用户',
+          user_id: c.user?.uid || c.user?.id || c.user_id || null,
+          user_avatar: c.user?.avatar_thumb?.url_list?.[0] || c.user_avatar || '',
           text: c.text || '',
           digg_count: c.digg_count || 0,
-          reply_count: c.reply_comment_total || 0,
+          reply_count: c.reply_comment_total || c.reply_count || 0,
           ip_label: c.ip_label || null,
-          create_time: c.create_time || null,
-          video_title: c.video_title || ''
+          create_time: c.create_time || null
         })),
         task: {
           task_type: crawlMode,
@@ -498,9 +512,9 @@ function App() {
       setDbSaveResult({
         insertedComments: syncData.comments_inserted || 0,
         skippedComments: (comments.length - (syncData.comments_inserted || 0)),
-        videosProcessed: syncData.video_id ? 1 : 0
+        videosProcessed: videosPayload.length
       });
-      showNotification(`成功保存到数据库！新增 ${syncData.comments_inserted || 0} 条，接收 ${syncData.comments_received || comments.length} 条`, 'success');
+      showNotification(`成功保存到数据库！新增 ${syncData.comments_inserted || 0} 条，接收 ${syncData.comments_received || comments.length} 条，处理了 ${videosPayload.length} 个视频`, 'success');
     } catch (err) {
       console.error('保存到数据库失败:', err);
       showNotification(`保存失败: ${err.message}。请确认后端服务已启动 (端口 3001)`, 'error');
@@ -617,6 +631,7 @@ function App() {
     setStopRequested(false);
     setComments([]);
     setVideoInfo(null);
+    setCrawledVideosMap({});
     setFetchedCount(0);
     setPercentProgress(0);
     setTotalEstimated(0);
@@ -754,6 +769,23 @@ function App() {
 
           // Update header info for first matching details
           setVideoInfo(prev => prev ? prev : details);
+
+          // Add to crawledVideosMap with full normalized details
+          const normalizedDetails = {
+            aweme_id: String(details.awemeId || details.id || currentVideo.id),
+            title: details.title || `视频作品 #${currentVideo.id}`,
+            cover_url: details.cover || details.cover_url || '',
+            author_name: details.authorName || details.author_name || '抖音创作者',
+            author_avatar: details.authorAvatar || details.author_avatar || '',
+            likes: parseInt(details.likes, 10) || 0,
+            comments_count: parseInt(details.commentsCount || details.comments_count, 10) || 0,
+            shares: parseInt(details.shares, 10) || 0,
+            collects: parseInt(details.collects || details.favorites || details.collect_count, 10) || 0
+          };
+          setCrawledVideosMap(prev => ({
+            ...prev,
+            [normalizedDetails.aweme_id]: normalizedDetails
+          }));
 
           let cursor = 0;
           let hasMore = true;
@@ -1971,39 +2003,44 @@ function App() {
                                     <span>IP: {c.ip_label}</span>
                                   </div>
                                 )}
-                                {c.aweme_id && (
-                                  <div 
-                                    className={`comment-action video-link-btn ${hasExtension ? 'extension-linked' : ''}`}
-                                    style={{
-                                      cursor: 'pointer', 
-                                      backgroundColor: hasExtension ? 'rgba(0, 242, 254, 0.08)' : 'rgba(255,44,85,0.08)', 
-                                      padding: '2px 8px', 
-                                      borderRadius: '4px', 
-                                      border: hasExtension ? '1px solid rgba(0, 242, 254, 0.2)' : '1px solid rgba(255,44,85,0.15)',
-                                      transition: 'all 0.2s ease',
-                                      display: 'flex',
-                                      alignItems: 'center',
-                                      gap: '4px'
-                                    }}
-                                    onClick={() => handleJumpToComment(c)}
-                                    title={hasExtension 
-                                      ? `通过浏览器助手精准定位此评论${c.video_title ? ` (来自视频: ${c.video_title})` : ''}` 
-                                      : `点击跳转到抖音作品页面并查看评论区${c.video_title ? ` (来自视频: ${c.video_title})` : ''}`
-                                    }
-                                  >
-                                    <Video size={10} style={{
-                                      display: 'inline-block', 
-                                      color: hasExtension ? '#00f2fe' : 'var(--color-primary)'
-                                    }} />
-                                    <span style={{
-                                      color: hasExtension ? '#00f2fe' : 'var(--color-primary)', 
-                                      fontSize: '0.72rem',
-                                      fontWeight: hasExtension ? 'bold' : 'normal'
-                                    }}>
-                                      {hasExtension ? '🔌 自动精准定位' : `视频 ${c.aweme_id} ↗`}
-                                    </span>
-                                  </div>
-                                )}
+                                {c.aweme_id && (() => {
+                                  const videoTitleVal = c.video_title || c.video?.title || '';
+                                  const videoDisplayTitle = videoTitleVal ? `视频: ${videoTitleVal}` : `视频 ${c.aweme_id}`;
+                                  const displayTitleShort = videoDisplayTitle.length > 22 ? videoDisplayTitle.substring(0, 22) + '...' : videoDisplayTitle;
+                                  return (
+                                    <div 
+                                      className={`comment-action video-link-btn ${hasExtension ? 'extension-linked' : ''}`}
+                                      style={{
+                                        cursor: 'pointer', 
+                                        backgroundColor: hasExtension ? 'rgba(0, 242, 254, 0.08)' : 'rgba(255,44,85,0.08)', 
+                                        padding: '2px 8px', 
+                                        borderRadius: '4px', 
+                                        border: hasExtension ? '1px solid rgba(0, 242, 254, 0.2)' : '1px solid rgba(255,44,85,0.15)',
+                                        transition: 'all 0.2s ease',
+                                        display: 'flex',
+                                        alignItems: 'center',
+                                        gap: '4px'
+                                      }}
+                                      onClick={() => handleJumpToComment(c)}
+                                      title={hasExtension 
+                                        ? `通过浏览器助手精准定位此评论${videoTitleVal ? ` (来自视频: ${videoTitleVal})` : ''}` 
+                                        : `点击跳转到抖音作品页面并查看评论区${videoTitleVal ? ` (来自视频: ${videoTitleVal})` : ''}`
+                                      }
+                                    >
+                                      <Video size={10} style={{
+                                        display: 'inline-block', 
+                                        color: hasExtension ? '#00f2fe' : 'var(--color-primary)'
+                                      }} />
+                                      <span style={{
+                                        color: hasExtension ? '#00f2fe' : 'var(--color-primary)', 
+                                        fontSize: '0.72rem',
+                                        fontWeight: hasExtension ? 'bold' : 'normal'
+                                      }}>
+                                        {hasExtension ? '🔌 自动精准定位' : `${displayTitleShort} ↗`}
+                                      </span>
+                                    </div>
+                                  );
+                                })()}
                                 <div 
                                   className="comment-action" 
                                   style={{cursor: 'pointer', marginLeft: 'auto', color: 'var(--color-danger)', opacity: 0.5}}
