@@ -47,8 +47,8 @@ function App() {
   const [searchPages, setSearchPages] = useState(1); // 1 to 5 pages
   
   // 评论 API 接口配置状态 (本地默认 / TikHub 开发者)
-  const [commentApiType, setCommentApiType] = useState(() => localStorage.getItem('comment_api_type') || 'local');
-  const [tikhubToken, setTikhubToken] = useState(() => localStorage.getItem('tikhub_token') || '');
+  const [commentApiType, setCommentApiType] = useState(() => localStorage.getItem('comment_api_type') || 'tikhub');
+  const [tikhubToken, setTikhubToken] = useState(() => localStorage.getItem('tikhub_token') || 'pawjW+xB3VyVu2qKOY+67w7nB2XWB5pF4DiA7U6hR8GXj2mwK0yeWAudDQ==');
   const [tikhubApiUrl, setTikhubApiUrl] = useState(() => localStorage.getItem('tikhub_api_url') || 'https://api.tikhub.dev');
 
   // Crawler Execution State
