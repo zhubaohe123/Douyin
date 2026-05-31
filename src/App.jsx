@@ -891,81 +891,134 @@ function App() {
             let url;
             const headers = {};
 
-            if (commentApiType === 'tikhub') {
-              url = `/api/db/tikhub/fetch_video_comments?aweme_id=${currentVideo.id}&cursor=${cursor}&count=${count}`;
-              if (tikhubToken) {
-                headers['Authorization'] = `Bearer ${tikhubToken}`;
-              }
-              if (tikhubApiUrl) {
-                headers['X-TikHub-API-URL'] = tikhubApiUrl;
-              }
-            } else if (commentApiType === 'wtf') {
-              url = `/api/db/wtf/fetch_video_comments?aweme_id=${currentVideo.id}&cursor=${cursor}&count=${count}`;
-              if (wtfToken) {
-                headers['Authorization'] = `Bearer ${wtfToken}`;
-              }
-              if (wtfApiUrl) {
-                headers['X-WTF-API-URL'] = wtfApiUrl;
+            let mappedComments = [];
+            
+            if (commentApiType === 'playwright') {
+              const pagesToFetch = Math.max(1, Math.ceil((fetchLimit - videoCommentsFetched) / 20));
+              url = `http://127.0.0.1:8000/api/comments?video_id=${currentVideo.id}&pages=${pagesToFetch}`;
+              
+              try {
+                const response = await fetch(url);
+                if (!response.ok) {
+                  console.error(`线程 ${workerId} 请求 Playwright 接口失败`);
+                  break;
+                }
+                const resData = await response.json();
+                
+                const commentList = resData.comments || (resData.data && resData.data.comments) || resData || [];
+                
+                if (!commentList || commentList.length === 0) {
+                  break;
+                }
+                
+                // 转换 Playwright 格式为现有兼容格式
+                mappedComments = commentList.map(c => ({
+                  cid: String(c.comment_id),
+                  text: c.text,
+                  create_time: c.create_time,
+                  digg_count: c.likes,
+                  ip_label: c.ip_label,
+                  reply_comment_total: c.reply_count,
+                  user: {
+                    uid: c.author?.uid,
+                    nickname: c.author?.name,
+                    sec_uid: c.author?.sec_uid,
+                    unique_id: c.author?.unique_id,
+                    avatar_thumb: { url_list: [c.author?.avatar] }
+                  },
+                  reply_comment: (c.replies || []).map(r => ({
+                    cid: String(r.comment_id),
+                    text: r.text,
+                    create_time: r.create_time,
+                    digg_count: r.likes,
+                    ip_label: r.ip_label,
+                    user: {
+                      uid: r.author?.uid,
+                      nickname: r.author?.name,
+                      sec_uid: r.author?.sec_uid,
+                      unique_id: r.author?.unique_id,
+                      avatar_thumb: { url_list: [r.author?.avatar] }
+                    }
+                  }))
+                }));
+                
+                hasMore = false; // 一次性返回所有页数
+                cursor = 0;
+              } catch (err) {
+                console.error(`线程 ${workerId} Playwright 网络异常:`, err);
+                break;
               }
             } else {
-              url = `/api/douyin/web/fetch_video_comments?aweme_id=${currentVideo.id}&cursor=${cursor}&count=${count}`;
+              if (commentApiType === 'tikhub') {
+                url = `/api/db/tikhub/fetch_video_comments?aweme_id=${currentVideo.id}&cursor=${cursor}&count=${count}`;
+                if (tikhubToken) headers['Authorization'] = `Bearer ${tikhubToken}`;
+                if (tikhubApiUrl) headers['X-TikHub-API-URL'] = tikhubApiUrl;
+              } else if (commentApiType === 'wtf') {
+                url = `/api/db/wtf/fetch_video_comments?aweme_id=${currentVideo.id}&cursor=${cursor}&count=${count}`;
+                if (wtfToken) headers['Authorization'] = `Bearer ${wtfToken}`;
+                if (wtfApiUrl) headers['X-WTF-API-URL'] = wtfApiUrl;
+              } else {
+                url = `/api/douyin/web/fetch_video_comments?aweme_id=${currentVideo.id}&cursor=${cursor}&count=${count}`;
+              }
+
+              try {
+                const response = await fetch(url, { headers });
+                if (!response.ok) {
+                  console.error(`线程 ${workerId} 请求失败`);
+                  break;
+                }
+
+                const resData = await response.json();
+                if (resData.code !== 200 || !resData.data) {
+                  console.error(`线程 ${workerId} 接口报错`);
+                  break;
+                }
+
+                const cdata = resData.data;
+                mappedComments = cdata.comments || [];
+
+                if (mappedComments.length === 0) {
+                  break;
+                }
+
+                cursor = cdata.cursor || (cursor + mappedComments.length);
+                hasMore = cdata.has_more === 1 || cdata.has_more === true;
+
+              } catch (err) {
+                console.error(`线程 ${workerId} 网络异常:`, err);
+                break;
+              }
             }
 
-            try {
-              const response = await fetch(url, { headers });
-              if (!response.ok) {
-                console.error(`线程 ${workerId} 请求失败`);
-                break;
-              }
+            // Apply comment text filtering
+            const uniqueCommentsInChunk = [];
+            for (const item of mappedComments) {
+              if (item && item.cid) {
+                const filterKeywords = keywordFilter.trim()
+                  ? keywordFilter.split(/[,，、\s|/]+/).map(k => k.trim()).filter(Boolean)
+                  : [];
 
-              const resData = await response.json();
-              if (resData.code !== 200 || !resData.data) {
-                console.error(`线程 ${workerId} 接口报错`);
-                break;
-              }
+                const matchesKeyword = filterKeywords.length === 0 || 
+                  filterKeywords.some(k => item.text && item.text.toLowerCase().includes(k.toLowerCase()));
 
-              const cdata = resData.data;
-              const commentList = cdata.comments || [];
-
-              if (commentList.length === 0) {
-                break;
-              }
-
-              // Apply comment text filtering
-              const uniqueCommentsInChunk = [];
-              for (const item of commentList) {
-                if (item && item.cid) {
-                  const filterKeywords = keywordFilter.trim()
-                    ? keywordFilter.split(/[,，、\s|/]+/).map(k => k.trim()).filter(Boolean)
-                    : [];
-
-                  const matchesKeyword = filterKeywords.length === 0 || 
-                    filterKeywords.some(k => item.text && item.text.toLowerCase().includes(k.toLowerCase()));
-
-                  if (matchesKeyword) {
-                    uniqueCommentsInChunk.push(item);
-                  }
+                if (matchesKeyword) {
+                  uniqueCommentsInChunk.push(item);
                 }
               }
+            }
 
-              // Thread-safe state update
-              appendComments(uniqueCommentsInChunk, currentVideo.id, details.title);
+            // Thread-safe state update
+            appendComments(uniqueCommentsInChunk, currentVideo.id, details.title);
 
-              videoCommentsFetched += commentList.length;
-              updateWorkerState(workerId, {
-                fetchedCount: videoCommentsFetched
-              });
+            videoCommentsFetched += mappedComments.length;
+            updateWorkerState(workerId, {
+              fetchedCount: videoCommentsFetched
+            });
 
-              cursor = cdata.cursor || (cursor + commentList.length);
-              hasMore = cdata.has_more === 1 || cdata.has_more === true;
-
-              // Organic randomized delay per request (800ms - 1100ms)
+            // Organic randomized delay per request (800ms - 1100ms) for paginated APIs
+            if (commentApiType !== 'playwright') {
               const randomDelay = 800 + Math.random() * 300;
               await new Promise(resolve => setTimeout(resolve, randomDelay));
-
-            } catch (err) {
-              console.error(`线程 ${workerId} 网络异常:`, err);
-              break;
             }
           }
 
@@ -1475,11 +1528,40 @@ function App() {
                   onChange={(e) => setCommentApiType(e.target.value)}
                   disabled={isCrawling}
                 >
+                  <option value="playwright">🔥 高阶无头浏览器采集 (Playwright, 127.0.0.1:8000)</option>
                   <option value="local">本地默认代理 (http://10.11.1.88)</option>
                   <option value="tikhub">TikHub 开发者接口 (tikhub.dev)</option>
                   <option value="wtf">douyin.wtf 开发者接口 (douyin.wtf)</option>
                 </select>
               </div>
+
+              {commentApiType === 'playwright' && (
+                <div style={{ animation: 'fadeIn 0.3s ease', display: 'flex', flexDirection: 'column', gap: '8px' }}>
+                  <div className="help-text" style={{ fontSize: '0.7rem', color: 'var(--color-text-muted)', display: 'flex', alignItems: 'center', gap: '6px' }}>
+                    <Info size={14} color="var(--color-primary)" />
+                    基于本地 Python 服务，全自动模拟人工滑动翻页采集评论，无视风控限制。
+                  </div>
+                  <button 
+                    className="action-btn outline"
+                    style={{ padding: '6px 12px', fontSize: '0.75rem', width: 'fit-content' }}
+                    onClick={async () => {
+                      try {
+                        const res = await fetch('http://127.0.0.1:8000/api/health');
+                        if (res.ok) {
+                          const data = await res.json();
+                          showNotification(`健康检查通过！状态: ${data.status} (浏览器激活: ${data.browser_initialized ? '是' : '否'})`, 'success');
+                        } else {
+                          showNotification('健康检查失败，服务异常。', 'error');
+                        }
+                      } catch (err) {
+                        showNotification('无法连接到本地 Playwright 服务 (端口 8000)。请确认服务已启动。', 'error');
+                      }
+                    }}
+                  >
+                    🏥 测试后端服务健康状态
+                  </button>
+                </div>
+              )}
 
               {commentApiType === 'tikhub' && (
                 <div style={{ animation: 'fadeIn 0.3s ease', display: 'flex', flexDirection: 'column', gap: '8px' }}>
