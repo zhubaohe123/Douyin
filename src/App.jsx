@@ -894,7 +894,7 @@ function App() {
             let mappedComments = [];
             
             if (commentApiType === 'playwright') {
-              const pagesToFetch = Math.max(1, Math.ceil((fetchLimit - videoCommentsFetched) / 20));
+              const pagesToFetch = Math.max(1, Math.ceil((fetchLimit - videoCommentsFetched) / 10));
               url = `http://127.0.0.1:8000/api/comments?video_id=${currentVideo.id}&pages=${pagesToFetch}`;
               
               try {
