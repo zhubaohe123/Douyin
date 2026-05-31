@@ -75,6 +75,7 @@ function App() {
   const [searchQuery, setSearchQuery] = useState('');
   const [sortOrder, setSortOrder] = useState('likes'); // 'likes' or 'time'
   const [showMarkedOnly, setShowMarkedOnly] = useState(false);
+  const [localPage, setLocalPage] = useState(1);
   const [notification, setNotification] = useState(null);
   const [hasExtension, setHasExtension] = useState(false);
 
@@ -98,6 +99,11 @@ function App() {
   useEffect(() => {
     localStorage.setItem('wtf_api_url', wtfApiUrl);
   }, [wtfApiUrl]);
+
+  // Reset local comments pagination page when filters or sorting change
+  useEffect(() => {
+    setLocalPage(1);
+  }, [searchQuery, sortOrder, showMarkedOnly]);
   
   // Database State
   const [isSavingToDb, setIsSavingToDb] = useState(false);
@@ -714,6 +720,7 @@ function App() {
     setIsCrawling(true);
     setStopRequested(false);
     setComments([]);
+    setLocalPage(1);
     setVideoInfo(null);
     setCrawledVideosMap({});
     setFetchedCount(0);
@@ -1179,6 +1186,11 @@ function App() {
       seenRenderedCids.add(key);
     }
   }
+
+  // Client-side comments list pagination to prevent rendering thousands of DOM nodes at once
+  const localPageSize = 50;
+  const localTotalPages = Math.ceil(renderedComments.length / localPageSize);
+  const paginatedRenderedComments = renderedComments.slice((localPage - 1) * localPageSize, localPage * localPageSize);
 
   // Calculate advanced statistics for the insights tab
   const getInsights = () => {
@@ -1926,8 +1938,8 @@ function App() {
 
                     {/* Feed item list */}
                     <div className="comments-list">
-                      {renderedComments.length > 0 ? (
-                        renderedComments.map((c) => (
+                      {paginatedRenderedComments.length > 0 ? (
+                        paginatedRenderedComments.map((c) => (
                           <div className="comment-card" key={String(c.cid)}>
                             {c.user?.avatar_thumb?.url_list?.[0] ? (
                               <img src={c.user.avatar_thumb.url_list[0]} className="commenter-avatar" alt="Avatar" />
@@ -2088,6 +2100,71 @@ function App() {
                         <div className="empty-state">
                           <AlertCircle size={40} style={{opacity: 0.3}} />
                           <p>未找到符合检索条件的评论，请尝试更换关键词。</p>
+                        </div>
+                      )}
+
+                      {/* Pagination Controls */}
+                      {renderedComments.length > localPageSize && (
+                        <div style={{display: 'flex', justifyContent: 'center', alignItems: 'center', gap: '16px', padding: '12px 0', borderTop: '1px solid rgba(255,255,255,0.05)', marginTop: '16px'}}>
+                          <button 
+                            type="button"
+                            className="btn-secondary" 
+                            style={{padding: '8px 16px', borderRadius: '50px', fontSize: '0.8rem', display: 'flex', alignItems: 'center', gap: '4px'}}
+                            onClick={() => {
+                              setLocalPage(prev => Math.max(1, prev - 1));
+                              document.querySelector('.tabs-header')?.scrollIntoView({ behavior: 'smooth' });
+                            }}
+                            disabled={localPage <= 1}
+                          >
+                            <ChevronLeft size={14} />
+                            <span>上一页</span>
+                          </button>
+                          <div style={{display: 'flex', gap: '4px'}}>
+                            {(() => {
+                              const pages = [];
+                              let start = Math.max(1, localPage - 2);
+                              let end = Math.min(localTotalPages, start + 4);
+                              if (end - start < 4) start = Math.max(1, end - 4);
+                              for (let i = start; i <= end; i++) {
+                                if (i < 1) continue;
+                                pages.push(
+                                  <button
+                                    type="button"
+                                    key={`local-page-${i}`}
+                                    style={{
+                                      width: '32px', height: '32px', borderRadius: '50%',
+                                      border: i === localPage ? '2px solid var(--color-primary)' : '1px solid var(--border-color)',
+                                      backgroundColor: i === localPage ? 'rgba(255,44,85,0.15)' : 'transparent',
+                                      color: i === localPage ? 'var(--color-primary)' : 'var(--color-text-muted)',
+                                      fontSize: '0.8rem', fontWeight: i === localPage ? 'bold' : 'normal',
+                                      cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center',
+                                      transition: 'all 0.2s ease'
+                                    }}
+                                    onClick={() => {
+                                      setLocalPage(i);
+                                      document.querySelector('.tabs-header')?.scrollIntoView({ behavior: 'smooth' });
+                                    }}
+                                  >
+                                    {i}
+                                  </button>
+                                );
+                              }
+                              return pages;
+                            })()}
+                          </div>
+                          <button 
+                            type="button"
+                            className="btn-secondary" 
+                            style={{padding: '8px 16px', borderRadius: '50px', fontSize: '0.8rem', display: 'flex', alignItems: 'center', gap: '4px'}}
+                            onClick={() => {
+                              setLocalPage(prev => Math.min(localTotalPages, prev + 1));
+                              document.querySelector('.tabs-header')?.scrollIntoView({ behavior: 'smooth' });
+                            }}
+                            disabled={localPage >= localTotalPages}
+                          >
+                            <span>下一页</span>
+                            <ChevronRight size={14} />
+                          </button>
                         </div>
                       )}
                     </div>
