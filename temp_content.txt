@@ -1,0 +1,63 @@
+@echo off
+:: 设置控制台为 UTF-8 编码
+chcp 65001 >nul
+title 抖音评论采集分析平台 - 一键启动
+
+echo =====================================================================
+echo             抖音评论采集分析平台 - 一键启动脚本
+echo =====================================================================
+echo.
+echo [系统] 正在后台启动所有服务，请保持弹出的黑框不要关闭...
+echo.
+
+REM 1. 启动 FastAPI Playwright 搜索 API
+echo [1/3] 正在启动 FastAPI Playwright 搜索接口 (Port: 8000)...
+if exist "%~dp0..\Douyin-api\main.py" (
+    start "1. 抖音搜索API (Port 8000)" /d "%~dp0..\Douyin-api" cmd /k "python main.py"
+) else (
+    echo [警告] 找不到 %~dp0..\Douyin-api\main.py，尝试绝对路径...
+    if exist "d:\daima\Douyin-api\main.py" (
+        start "1. 抖音搜索API (Port 8000)" /d "d:\daima\Douyin-api" cmd /k "python main.py"
+    ) else (
+        echo [错误] 找不到 Douyin-api 文件夹！
+    )
+)
+timeout /t 3 >nul
+
+REM 2. 启动 Express 数据库中转后台
+echo [2/3] 正在启动 Express 数据库后台 (Port: 3001)...
+if exist "%~dp0server\index.js" (
+    start "2. 数据库后台 (Port 3001)" /d "%~dp0server" cmd /k "npm run dev"
+) else (
+    echo [警告] 找不到 %~dp0server\index.js，尝试绝对路径...
+    if exist "d:\daima\Douyin\server\index.js" (
+        start "2. 数据库后台 (Port 3001)" /d "d:\daima\Douyin\server" cmd /k "npm run dev"
+    ) else (
+        echo [错误] 找不到 server 文件夹！
+    )
+)
+timeout /t 2 >nul
+
+REM 3. 启动 Vite 前端界面
+echo [3/3] 正在启动 React + Vite 前端...
+start "3. Vite 前端界面" /d "%~dp0" cmd /k "npm run dev"
+timeout /t 3 >nul
+
+echo.
+echo =====================================================================
+echo.
+echo  🎉 所有后台服务已成功启动！
+echo.
+echo  - 搜索 API 服务 : http://localhost:8000
+echo  - 数据库 API 服务: http://localhost:3001
+echo  - 前端系统界面  : http://localhost:5173
+echo.
+echo  正在为您自动打开浏览器...
+echo.
+echo =====================================================================
+
+start http://localhost:5173
+
+echo.
+echo 按任意键退出本一键启动控制台（不会影响已启动的后台服务）...
+pause >nul

@@ -31,6 +31,35 @@ import {
 } from 'lucide-react';
 import * as XLSX from 'xlsx';
 import './App.css';
+import { Bar, Line, Doughnut } from 'react-chartjs-2';
+import {
+  Chart as ChartJS,
+  CategoryScale,
+  LinearScale,
+  BarElement,
+  PointElement,
+  LineElement,
+  ArcElement,
+  Title,
+  Tooltip,
+  Legend,
+  Filler
+} from 'chart.js';
+
+// Register Chart.js components
+ChartJS.register(
+  CategoryScale,
+  LinearScale,
+  BarElement,
+  PointElement,
+  LineElement,
+  ArcElement,
+  Title,
+  Tooltip,
+  Legend,
+  Filler
+);
+
 
 function App() {
   // Input & Crawl Configuration State
@@ -122,6 +151,8 @@ function App() {
   const [dbVideos, setDbVideos] = useState([]);
   const [dbTasks, setDbTasks] = useState([]);
   const [dbStats, setDbStats] = useState(null);
+  const [dbViewMode, setDbViewMode] = useState('list'); // 'list' or 'dashboard'
+
 
   // Refs to control crawling loops
   const crawlActiveRef = useRef(false);
@@ -619,6 +650,7 @@ function App() {
         totalLikes: result.total_likes || 0,
         ipDistribution: result.ip_distribution || [],
         topLiked: result.top_liked || [],
+        dateDistribution: result.date_distribution || [],
       });
     } catch (err) {
       console.error('获取统计失败:', err);
@@ -1243,6 +1275,38 @@ function App() {
     }
     const topComments = uniqueTopComments.slice(0, 3);
 
+    // 5. Hourly Distribution (0-23)
+    const hourlyCounts = Array(24).fill(0);
+    comments.forEach(c => {
+      if (!c.create_time) return;
+      try {
+        const date = new Date(c.create_time * 1000);
+        const hour = date.getHours();
+        hourlyCounts[hour]++;
+      } catch (e) {}
+    });
+
+    // 6. Comment Length Distribution
+    const lengthCounts = { '0-5字': 0, '6-15字': 0, '16-30字': 0, '31字以上': 0 };
+    comments.forEach(c => {
+      if (!c.text) return;
+      const len = c.text.length;
+      if (len <= 5) lengthCounts['0-5字']++;
+      else if (len <= 15) lengthCounts['6-15字']++;
+      else if (len <= 30) lengthCounts['16-30字']++;
+      else lengthCounts['31字以上']++;
+    });
+
+    // 7. Like Tiers Distribution
+    const likeCounts = { '0赞 (无互动)': 0, '1-5赞 (低互动)': 0, '6-20赞 (中互动)': 0, '21赞以上 (高热度)': 0 };
+    comments.forEach(c => {
+      const likes = c.digg_count || 0;
+      if (likes === 0) likeCounts['0赞 (无互动)']++;
+      else if (likes <= 5) likeCounts['1-5赞 (低互动)']++;
+      else if (likes <= 20) likeCounts['6-20赞 (中互动)']++;
+      else likeCounts['21赞以上 (高热度)']++;
+    });
+
     return {
       ipDistribution,
       keywords,
@@ -1250,11 +1314,395 @@ function App() {
       totalLikes,
       totalReplies,
       hasRepliesPercent,
-      topComments
+      topComments,
+      hourlyCounts,
+      lengthCounts,
+      likeCounts
     };
   };
 
   const insights = getInsights();
+
+  // Define Chart.js config when insights are available
+  let keywordsData = null;
+  let keywordsOptions = null;
+  let ipData = null;
+  let ipOptions = null;
+  let hourlyData = null;
+  let hourlyOptions = null;
+  let lengthData = null;
+  let lengthOptions = null;
+  let engagementData = null;
+  let engagementOptions = null;
+
+  if (insights) {
+    keywordsData = {
+      labels: insights.keywords.map(kw => kw.word),
+      datasets: [
+        {
+          label: '出现次数',
+          data: insights.keywords.map(kw => kw.count),
+          backgroundColor: 'rgba(255, 44, 85, 0.75)',
+          borderColor: 'rgba(255, 44, 85, 1)',
+          borderWidth: 1,
+          borderRadius: 4,
+          hoverBackgroundColor: 'rgba(255, 44, 85, 0.95)',
+        }
+      ]
+    };
+
+    keywordsOptions = {
+      indexAxis: 'y',
+      responsive: true,
+      maintainAspectRatio: false,
+      plugins: {
+        legend: { display: false },
+        tooltip: {
+          backgroundColor: 'rgba(17, 24, 39, 0.95)',
+          titleColor: '#fff',
+          bodyColor: '#e5e7eb',
+          borderColor: 'rgba(255, 255, 255, 0.08)',
+          borderWidth: 1,
+          padding: 10,
+        }
+      },
+      scales: {
+        x: {
+          grid: { color: 'rgba(255, 255, 255, 0.03)' },
+          ticks: { color: 'var(--color-text-muted)', stepSize: 1 }
+        },
+        y: {
+          grid: { display: false },
+          ticks: { color: '#ffffff', font: { weight: '600' } }
+        }
+      }
+    };
+
+    ipData = {
+      labels: insights.ipDistribution.map(ip => ip.label),
+      datasets: [
+        {
+          data: insights.ipDistribution.map(ip => ip.count),
+          backgroundColor: [
+            'rgba(255, 44, 85, 0.75)',
+            'rgba(0, 242, 254, 0.75)',
+            'rgba(99, 102, 241, 0.75)',
+            'rgba(16, 185, 129, 0.75)',
+            'rgba(245, 158, 11, 0.75)',
+            'rgba(239, 68, 68, 0.75)',
+            'rgba(236, 72, 153, 0.75)',
+            'rgba(139, 92, 246, 0.75)',
+          ],
+          borderColor: 'rgba(8, 11, 17, 0.8)',
+          borderWidth: 2,
+          hoverOffset: 6,
+        }
+      ]
+    };
+
+    ipOptions = {
+      responsive: true,
+      maintainAspectRatio: false,
+      plugins: {
+        legend: {
+          position: 'right',
+          labels: {
+            color: 'var(--color-text-muted)',
+            font: { size: 11 },
+            padding: 10,
+            boxWidth: 12
+          }
+        },
+        tooltip: {
+          backgroundColor: 'rgba(17, 24, 39, 0.95)',
+          titleColor: '#fff',
+          bodyColor: '#e5e7eb',
+          borderColor: 'rgba(255, 255, 255, 0.08)',
+          borderWidth: 1,
+          padding: 10,
+        }
+      }
+    };
+
+    hourlyData = {
+      labels: Array.from({ length: 24 }, (_, i) => `${String(i).padStart(2, '0')}:00`),
+      datasets: [
+        {
+          label: '评论发布数量',
+          data: insights.hourlyCounts,
+          fill: true,
+          backgroundColor: 'rgba(0, 242, 254, 0.15)',
+          borderColor: 'var(--color-secondary)',
+          borderWidth: 2,
+          tension: 0.4,
+          pointBackgroundColor: 'var(--color-secondary)',
+          pointBorderColor: '#fff',
+          pointHoverRadius: 6,
+        }
+      ]
+    };
+
+    hourlyOptions = {
+      responsive: true,
+      maintainAspectRatio: false,
+      plugins: {
+        legend: { display: false },
+        tooltip: {
+          backgroundColor: 'rgba(17, 24, 39, 0.95)',
+          titleColor: '#fff',
+          bodyColor: '#e5e7eb',
+          borderColor: 'rgba(255, 255, 255, 0.08)',
+          borderWidth: 1,
+          padding: 10,
+        }
+      },
+      scales: {
+        x: {
+          grid: { color: 'rgba(255, 255, 255, 0.03)' },
+          ticks: { color: 'var(--color-text-muted)', maxTicksLimit: 12 }
+        },
+        y: {
+          grid: { color: 'rgba(255, 255, 255, 0.05)' },
+          ticks: { color: 'var(--color-text-muted)', precision: 0 }
+        }
+      }
+    };
+
+    lengthData = {
+      labels: Object.keys(insights.lengthCounts),
+      datasets: [
+        {
+          data: Object.values(insights.lengthCounts),
+          backgroundColor: [
+            'rgba(16, 185, 129, 0.75)',
+            'rgba(99, 102, 241, 0.75)',
+            'rgba(245, 158, 11, 0.75)',
+            'rgba(255, 44, 85, 0.75)'
+          ],
+          borderColor: 'rgba(8, 11, 17, 0.8)',
+          borderWidth: 2,
+        }
+      ]
+    };
+
+    lengthOptions = {
+      responsive: true,
+      maintainAspectRatio: false,
+      plugins: {
+        legend: {
+          position: 'right',
+          labels: {
+            color: 'var(--color-text-muted)',
+            font: { size: 11 },
+            padding: 10,
+            boxWidth: 12
+          }
+        },
+        tooltip: {
+          backgroundColor: 'rgba(17, 24, 39, 0.95)',
+          titleColor: '#fff',
+          bodyColor: '#e5e7eb',
+          borderColor: 'rgba(255, 255, 255, 0.08)',
+          borderWidth: 1,
+          padding: 10,
+        }
+      }
+    };
+
+    engagementData = {
+      labels: Object.keys(insights.likeCounts),
+      datasets: [
+        {
+          label: '评论数',
+          data: Object.values(insights.likeCounts),
+          backgroundColor: 'rgba(99, 102, 241, 0.75)',
+          borderColor: 'var(--color-accent)',
+          borderWidth: 1,
+          borderRadius: 4,
+        }
+      ]
+    };
+
+    engagementOptions = {
+      responsive: true,
+      maintainAspectRatio: false,
+      plugins: {
+        legend: { display: false },
+        tooltip: {
+          backgroundColor: 'rgba(17, 24, 39, 0.95)',
+          titleColor: '#fff',
+          bodyColor: '#e5e7eb',
+          borderColor: 'rgba(255, 255, 255, 0.08)',
+          borderWidth: 1,
+          padding: 10,
+        }
+      },
+      scales: {
+        x: {
+          grid: { display: false },
+          ticks: { color: 'var(--color-text-muted)' }
+        },
+        y: {
+          grid: { color: 'rgba(255, 255, 255, 0.05)' },
+          ticks: { color: 'var(--color-text-muted)', precision: 0 }
+        }
+      }
+    };
+  }
+
+  // Define Database Chart.js config when dbStats is available
+  let dbIpData = null;
+  let dbIpOptions = null;
+  let dbTrendData = null;
+  let dbTrendOptions = null;
+  let dbVideoCommentData = null;
+  let dbVideoCommentOptions = null;
+
+  if (dbStats) {
+    // 1. IP Distribution (Top 10)
+    dbIpData = {
+      labels: dbStats.ipDistribution.map(ip => ip.ip_label || '未知位置'),
+      datasets: [
+        {
+          data: dbStats.ipDistribution.map(ip => ip.count),
+          backgroundColor: [
+            'rgba(255, 44, 85, 0.75)',
+            'rgba(0, 242, 254, 0.75)',
+            'rgba(99, 102, 241, 0.75)',
+            'rgba(16, 185, 129, 0.75)',
+            'rgba(245, 158, 11, 0.75)',
+            'rgba(239, 68, 68, 0.75)',
+            'rgba(236, 72, 153, 0.75)',
+            'rgba(139, 92, 246, 0.75)',
+            'rgba(20, 184, 166, 0.75)',
+            'rgba(107, 114, 128, 0.75)',
+          ],
+          borderColor: 'rgba(8, 11, 17, 0.8)',
+          borderWidth: 2,
+        }
+      ]
+    };
+
+    dbIpOptions = {
+      responsive: true,
+      maintainAspectRatio: false,
+      plugins: {
+        legend: {
+          position: 'right',
+          labels: {
+            color: 'var(--color-text-muted)',
+            font: { size: 11 },
+            boxWidth: 12
+          }
+        },
+        tooltip: {
+          backgroundColor: 'rgba(17, 24, 39, 0.95)',
+          titleColor: '#fff',
+          bodyColor: '#e5e7eb',
+          borderColor: 'rgba(255, 255, 255, 0.08)',
+          borderWidth: 1,
+        }
+      }
+    };
+
+    // 2. comment daily trend (last 30 days)
+    const sortedDbDates = dbStats.dateDistribution ? [...dbStats.dateDistribution].reverse() : [];
+    dbTrendData = {
+      labels: sortedDbDates.map(d => d.date),
+      datasets: [
+        {
+          label: '每日入库评论数',
+          data: sortedDbDates.map(d => d.count),
+          fill: true,
+          backgroundColor: 'rgba(255, 44, 85, 0.1)',
+          borderColor: 'var(--color-primary)',
+          borderWidth: 2,
+          tension: 0.3,
+          pointBackgroundColor: 'var(--color-primary)',
+          pointBorderColor: '#fff',
+          pointHoverRadius: 6,
+        }
+      ]
+    };
+
+    dbTrendOptions = {
+      responsive: true,
+      maintainAspectRatio: false,
+      plugins: {
+        legend: { display: false },
+        tooltip: {
+          backgroundColor: 'rgba(17, 24, 39, 0.95)',
+          titleColor: '#fff',
+          bodyColor: '#e5e7eb',
+          borderColor: 'rgba(255, 255, 255, 0.08)',
+          borderWidth: 1,
+        }
+      },
+      scales: {
+        x: {
+          grid: { color: 'rgba(255, 255, 255, 0.03)' },
+          ticks: { color: 'var(--color-text-muted)', maxTicksLimit: 10 }
+        },
+        y: {
+          grid: { color: 'rgba(255, 255, 255, 0.05)' },
+          ticks: { color: 'var(--color-text-muted)', precision: 0 }
+        }
+      }
+    };
+
+    // 3. Top commented videos comparison
+    const sortedDbVideos = dbVideos ? [...dbVideos].sort((a, b) => (b.real_comment_count || 0) - (a.real_comment_count || 0)).slice(0, 10) : [];
+    dbVideoCommentData = {
+      labels: sortedDbVideos.map(v => (v.title || '').substring(0, 15) || `视频 #${v.aweme_id}`),
+      datasets: [
+        {
+          label: '视频总评论数',
+          data: sortedDbVideos.map(v => v.comments_count || 0),
+          backgroundColor: 'rgba(0, 242, 254, 0.5)',
+          borderColor: 'rgba(0, 242, 254, 1)',
+          borderWidth: 1,
+          borderRadius: 4,
+        },
+        {
+          label: '已收录存库数',
+          data: sortedDbVideos.map(v => v.real_comment_count || 0),
+          backgroundColor: 'rgba(255, 44, 85, 0.75)',
+          borderColor: 'var(--color-primary)',
+          borderWidth: 1,
+          borderRadius: 4,
+        }
+      ]
+    };
+
+    dbVideoCommentOptions = {
+      indexAxis: 'y',
+      responsive: true,
+      maintainAspectRatio: false,
+      plugins: {
+        legend: {
+          position: 'top',
+          labels: { color: 'var(--color-text-muted)', font: { size: 11 } }
+        },
+        tooltip: {
+          backgroundColor: 'rgba(17, 24, 39, 0.95)',
+          titleColor: '#fff',
+          bodyColor: '#e5e7eb',
+          borderColor: 'rgba(255, 255, 255, 0.08)',
+          borderWidth: 1,
+        }
+      },
+      scales: {
+        x: {
+          grid: { color: 'rgba(255, 255, 255, 0.03)' },
+          ticks: { color: 'var(--color-text-muted)' }
+        },
+        y: {
+          grid: { display: false },
+          ticks: { color: '#ffffff', font: { weight: '600' } }
+        }
+      }
+    };
+  }
 
   // Reset App state to idle
   const handleReset = () => {
@@ -2195,59 +2643,66 @@ function App() {
                       </div>
                     </div>
 
-                    {/* Word Cloud/Frequency Chart */}
-                    <div className="chart-card">
+                    {/* Word Frequency Chart */}
+                    <div className="chart-card" style={{minHeight: '380px'}}>
                       <h3 className="chart-title">
                         <TrendingUp size={16} className="text-secondary" />
-                        <span>评论热词词频统计 top 10</span>
+                        <span>评论热词词频统计 Top 10</span>
                       </h3>
-                      <div style={{display: 'flex', flexDirection: 'column', gap: '12px', justifyContent: 'center', flex: 1}}>
+                      <div style={{flex: 1, position: 'relative', height: '300px'}}>
                         {insights.keywords.length > 0 ? (
-                          insights.keywords.map((kw, i) => {
-                            const maxCount = insights.keywords[0].count;
-                            const pct = Math.round((kw.count / maxCount) * 100);
-                            return (
-                              <div key={`${kw.word || 'kw'}-${i}`} style={{display: 'flex', alignItems: 'center', gap: '12px'}}>
-                                <span style={{width: '24px', fontSize: '0.8rem', color: 'var(--color-text-muted)', fontFamily: 'monospace'}}>#{i+1}</span>
-                                <span style={{width: '70px', fontSize: '0.85rem', fontWeight: '600', textOverflow: 'ellipsis', overflow: 'hidden', whiteSpace: 'nowrap'}}>{kw.word}</span>
-                                <div style={{flex: 1, height: '8px', backgroundColor: 'rgba(255,255,255,0.03)', borderRadius: '50px', overflow: 'hidden'}}>
-                                  <div style={{height: '100%', width: `${pct}%`, background: 'linear-gradient(to right, var(--color-secondary), var(--color-accent))', borderRadius: '50px'}}></div>
-                                </div>
-                                <span style={{width: '40px', textAlign: 'right', fontSize: '0.8rem', color: 'var(--color-text-muted)'}}>{kw.count}次</span>
-                              </div>
-                            );
-                          })
+                          <Bar data={keywordsData} options={keywordsOptions} />
                         ) : (
-                          <div style={{textAlign: 'center', padding: '40px', color: 'var(--color-text-muted)'}}>未能提取足够有效的关键词，可能是评论太短。</div>
+                          <div style={{textAlign: 'center', padding: '80px 0', color: 'var(--color-text-muted)'}}>未能提取足够有效的关键词，可能是评论太短。</div>
                         )}
                       </div>
                     </div>
 
                     {/* IP Location Distribution */}
-                    <div className="chart-card">
+                    <div className="chart-card" style={{minHeight: '380px'}}>
                       <h3 className="chart-title">
                         <MapPin size={16} className="text-primary" />
-                        <span>评论用户 IP 属地分布 top 8</span>
+                        <span>评论用户 IP 属地分布 Top 8</span>
                       </h3>
-                      <div style={{display: 'flex', flexDirection: 'column', gap: '12px', justifyContent: 'center', flex: 1}}>
+                      <div style={{flex: 1, position: 'relative', height: '300px', display: 'flex', alignItems: 'center', justifyContent: 'center'}}>
                         {insights.ipDistribution.length > 0 ? (
-                          insights.ipDistribution.map((ip, i) => {
-                            const maxCount = insights.ipDistribution[0].count;
-                            const pct = Math.round((ip.count / maxCount) * 100);
-                            return (
-                              <div key={`${ip.label || 'ip'}-${i}`} style={{display: 'flex', alignItems: 'center', gap: '12px'}}>
-                                <span style={{width: '24px', fontSize: '0.8rem', color: 'var(--color-text-muted)', fontFamily: 'monospace'}}>#{i+1}</span>
-                                <span style={{width: '70px', fontSize: '0.85rem', fontWeight: '600', textOverflow: 'ellipsis', overflow: 'hidden', whiteSpace: 'nowrap'}}>{ip.label}</span>
-                                <div style={{flex: 1, height: '8px', backgroundColor: 'rgba(255,255,255,0.03)', borderRadius: '50px', overflow: 'hidden'}}>
-                                  <div style={{height: '100%', width: `${pct}%`, background: 'linear-gradient(to right, var(--color-primary), var(--color-secondary))', borderRadius: '50px'}}></div>
-                                </div>
-                                <span style={{width: '40px', textAlign: 'right', fontSize: '0.8rem', color: 'var(--color-text-muted)'}}>{ip.count}人</span>
-                              </div>
-                            );
-                          })
+                          <Doughnut data={ipData} options={ipOptions} />
                         ) : (
-                          <div style={{textAlign: 'center', padding: '40px', color: 'var(--color-text-muted)'}}>没有位置属地数据。</div>
+                          <div style={{textAlign: 'center', padding: '80px 0', color: 'var(--color-text-muted)'}}>没有位置属地数据。</div>
                         )}
+                      </div>
+                    </div>
+
+                    {/* Hourly Comment posting trend */}
+                    <div className="chart-card" style={{gridColumn: '1 / -1', minHeight: '350px'}}>
+                      <h3 className="chart-title">
+                        <Clock size={16} className="text-accent" />
+                        <span>评论发布时间段分布趋势 (24小时分布)</span>
+                      </h3>
+                      <div style={{flex: 1, position: 'relative', height: '280px'}}>
+                        <Line data={hourlyData} options={hourlyOptions} />
+                      </div>
+                    </div>
+
+                    {/* Comment Length Distribution */}
+                    <div className="chart-card">
+                      <h3 className="chart-title">
+                        <FileText size={16} style={{color: 'rgba(16, 185, 129, 1)'}} />
+                        <span>评论字数长度分布</span>
+                      </h3>
+                      <div style={{flex: 1, position: 'relative', height: '260px', display: 'flex', alignItems: 'center', justifyContent: 'center'}}>
+                        <Doughnut data={lengthData} options={lengthOptions} />
+                      </div>
+                    </div>
+
+                    {/* Comment Engagement Like Tiers */}
+                    <div className="chart-card">
+                      <h3 className="chart-title">
+                        <ThumbsUp size={16} className="text-secondary" />
+                        <span>评论互动点赞层级分布</span>
+                      </h3>
+                      <div style={{flex: 1, position: 'relative', height: '260px'}}>
+                        <Bar data={engagementData} options={engagementOptions} />
                       </div>
                     </div>
 
@@ -2309,8 +2764,56 @@ function App() {
                       </div>
                     )}
 
-                    {/* Search & Filter Controls */}
-                    <div style={{display: 'flex', gap: '12px', flexWrap: 'wrap', alignItems: 'flex-end'}}>
+                    {/* DB View Mode Switcher */}
+                    <div style={{display: 'flex', gap: '8px', borderBottom: '1px solid var(--border-color)', paddingBottom: '12px', marginBottom: '8px'}}>
+                      <button
+                        type="button"
+                        onClick={() => setDbViewMode('list')}
+                        style={{
+                          padding: '8px 16px',
+                          borderRadius: '50px',
+                          border: dbViewMode === 'list' ? '2px solid #10b981' : '1px solid var(--border-color)',
+                          backgroundColor: dbViewMode === 'list' ? 'rgba(16, 185, 129, 0.15)' : 'transparent',
+                          color: dbViewMode === 'list' ? '#10b981' : 'var(--color-text-muted)',
+                          fontSize: '0.85rem',
+                          fontWeight: '600',
+                          cursor: 'pointer',
+                          display: 'flex',
+                          alignItems: 'center',
+                          gap: '6px',
+                          transition: 'all 0.2s ease'
+                        }}
+                      >
+                        <FileText size={14} />
+                        <span>数据列表视图</span>
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => setDbViewMode('dashboard')}
+                        style={{
+                          padding: '8px 16px',
+                          borderRadius: '50px',
+                          border: dbViewMode === 'dashboard' ? '2px solid #10b981' : '1px solid var(--border-color)',
+                          backgroundColor: dbViewMode === 'dashboard' ? 'rgba(16, 185, 129, 0.15)' : 'transparent',
+                          color: dbViewMode === 'dashboard' ? '#10b981' : 'var(--color-text-muted)',
+                          fontSize: '0.85rem',
+                          fontWeight: '600',
+                          cursor: 'pointer',
+                          display: 'flex',
+                          alignItems: 'center',
+                          gap: '6px',
+                          transition: 'all 0.2s ease'
+                        }}
+                      >
+                        <BarChart2 size={14} />
+                        <span>数据图表大屏</span>
+                      </button>
+                    </div>
+
+                    {dbViewMode === 'list' && (
+                      <>
+                        {/* Search & Filter Controls */}
+                        <div style={{display: 'flex', gap: '12px', flexWrap: 'wrap', alignItems: 'flex-end'}}>
                       <div style={{flex: 2, minWidth: '200px'}}>
                         <label style={{fontSize: '0.72rem', color: 'var(--color-text-muted)', marginBottom: '4px', display: 'block'}}>全文搜索评论内容</label>
                         <div style={{position: 'relative'}}>
@@ -2573,6 +3076,60 @@ function App() {
                           <span>下一页</span>
                           <ChevronRight size={14} />
                         </button>
+                      </div>
+                    )}
+                      </>
+                    )}
+
+                    {/* Dashboard Mode Charts */}
+                    {dbViewMode === 'dashboard' && dbStats && (
+                      <div className="analytics-grid" style={{marginTop: '8px'}}>
+                        
+                        {/* 1. DB Hourly/Daily Comments Trend */}
+                        <div className="chart-card" style={{gridColumn: '1 / -1', minHeight: '350px'}}>
+                          <h3 className="chart-title">
+                            <Clock size={16} className="text-success" />
+                            <span>数据库近 30 天评论增量采集趋势</span>
+                          </h3>
+                          <div style={{flex: 1, position: 'relative', height: '280px'}}>
+                            {dbStats.dateDistribution && dbStats.dateDistribution.length > 0 ? (
+                              <Line data={dbTrendData} options={dbTrendOptions} />
+                            ) : (
+                              <div style={{textAlign: 'center', padding: '80px 0', color: 'var(--color-text-muted)'}}>没有近30天的趋势数据。</div>
+                            )}
+                          </div>
+                        </div>
+
+                        {/* 2. DB IP Location distribution */}
+                        <div className="chart-card" style={{minHeight: '380px'}}>
+                          <h3 className="chart-title">
+                            <MapPin size={16} className="text-primary" />
+                            <span>全库用户 IP 属地分布 (Top 10)</span>
+                          </h3>
+                          <div style={{flex: 1, position: 'relative', height: '300px', display: 'flex', alignItems: 'center', justifyContent: 'center'}}>
+                            {dbStats.ipDistribution && dbStats.ipDistribution.length > 0 ? (
+                              <Doughnut data={dbIpData} options={dbIpOptions} />
+                            ) : (
+                              <div style={{textAlign: 'center', padding: '80px 0', color: 'var(--color-text-muted)'}}>没有属地数据。</div>
+                            )}
+                          </div>
+                        </div>
+
+                        {/* 3. DB Video Comment Ranking comparison */}
+                        <div className="chart-card" style={{minHeight: '380px'}}>
+                          <h3 className="chart-title">
+                            <Video size={16} className="text-secondary" />
+                            <span>数据库收录视频评论排行 (Top 10)</span>
+                          </h3>
+                          <div style={{flex: 1, position: 'relative', height: '300px'}}>
+                            {dbVideos && dbVideos.length > 0 ? (
+                              <Bar data={dbVideoCommentData} options={dbVideoCommentOptions} />
+                            ) : (
+                              <div style={{textAlign: 'center', padding: '80px 0', color: 'var(--color-text-muted)'}}>无收录视频对比数据。</div>
+                            )}
+                          </div>
+                        </div>
+
                       </div>
                     )}
 
