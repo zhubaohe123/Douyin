@@ -1,4 +1,4 @@
-﻿# 抖音评论采集与分析平台
+# 抖音评论采集与分析平台
 
 这是一个基于 **React + Vite + Express + MySQL** 的抖音评论采集、管理与可视化分析平台，配套一个用于页面内评论定位的浏览器扩展。项目聚焦于批量抓取视频评论、结构化入库、检索筛选、统计分析和数据导出。
 
@@ -17,7 +17,7 @@
 
 ## 系统架构
 
-`mermaid
+```mermaid
 flowchart LR
   A[前端 React + Vite] --> B[评论采集与任务调度]
   B --> C[TikHub / douyin.wtf 接口]
@@ -26,7 +26,7 @@ flowchart LR
   E --> F[(MySQL)]
   G[Chrome 扩展] --> H[抖音网页]
   G --> A
-`
+```
 
 前端负责用户交互与数据展示；后端负责任务入库、评论查询、统计接口和数据持久化；浏览器扩展负责在抖音页面内辅助定位与采集体验。
 
@@ -43,19 +43,19 @@ flowchart LR
 
 ### 后端能力
 
-- POST /api/db/sync/comments：同步评论数据
-- GET /api/db/comments：查询评论列表
-- GET /api/db/comments/search：评论全文搜索
-- GET /api/db/comments/stats：评论统计信息
-- DELETE /api/db/comments/:cid：删除指定评论
-- GET /api/db/videos：查询视频列表
-- GET /api/db/tasks：查询任务列表
-- GET /api/db/tasks/:id：查询任务详情
-- GET /api/db/health：后端健康检查
+- `POST /api/db/sync/comments`：同步评论数据
+- `GET /api/db/comments`：查询评论列表
+- `GET /api/db/comments/search`：评论全文搜索
+- `GET /api/db/comments/stats`：评论统计信息
+- `DELETE /api/db/comments/:cid`：删除指定评论
+- `GET /api/db/videos`：查询视频列表
+- `GET /api/db/tasks`：查询任务列表
+- `GET /api/db/tasks/:id`：查询任务详情
+- `GET /api/db/health`：后端健康检查
 
 ### 浏览器扩展
 
-扩展位于 chrome-extension/ 目录，主要能力包括：
+扩展位于 `chrome-extension/` 目录，主要能力包括：
 
 - 在抖音相关页面配合采集系统使用
 - 辅助评论定位与页面交互
@@ -70,7 +70,7 @@ flowchart LR
 
 ## 目录结构
 
-`	ext
+```text
 .
 ├─ chrome-extension/         # 浏览器扩展
 ├─ public/                   # 前端静态资源
@@ -82,7 +82,7 @@ flowchart LR
 ├─ package.json
 ├─ README.md
 └─ LICENSE
-`
+```
 
 ## 快速开始
 
@@ -95,49 +95,49 @@ flowchart LR
 
 ### 1. 克隆仓库
 
-`ash
+```bash
 git clone https://github.com/zhubaohe123/Douyin.git
 cd Douyin
-`
+```
 
 ### 2. 启动后端服务
 
-`ash
+```bash
 cd server
 cp .env.example .env
 # 根据本地环境修改数据库配置和端口
 npm install
 npm run dev
-`
+```
 
 默认健康检查接口：
 
-`ash
+```bash
 curl http://localhost:3001/api/db/health
-`
+```
 
 ### 3. 启动前端服务
 
-`ash
+```bash
 cd ..
 npm install
 npm run dev
-`
+```
 
 默认情况下，前端会启动 Vite 开发服务器，并通过代理将部分 API 请求转发到后端服务。
 
 ### 4. 使用浏览器扩展
 
-1. 打开 Chrome，进入 chrome://extensions
+1. 打开 Chrome，进入 `chrome://extensions`
 2. 开启「开发者模式」
 3. 选择「加载已解压的扩展程序」
-4. 选择 chrome-extension/ 目录
+4. 选择 `chrome-extension/` 目录
 
 ## 配置说明
 
-- 前端部分配置项保存在浏览器 localStorage，例如评论接口类型、接口地址和 Token
-- 后端服务配置位于 server/.env，请参考 server/.env.example 进行修改
-- ite.config.js 中包含开发代理配置，可按需调整后端地址
+- 前端部分配置项保存在浏览器 `localStorage`，例如评论接口类型、接口地址和 Token
+- 后端服务配置位于 `server/.env`，请参考 `server/.env.example` 进行修改
+- `vite.config.js` 中包含开发代理配置，可按需调整后端地址
 
 ## 使用建议
 
